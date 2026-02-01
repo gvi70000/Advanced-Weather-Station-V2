@@ -4,41 +4,6 @@
 
 #include "stm32g4xx_hal.h"
 
-	// --- Geometry ---------------------------------------------------
-	// 3 transducers on a circle: cone base Ø = 96 mm, at 120deg.
-	// They form a cone with the reflector in the tip at 150mm from the base
-	// The cone semi angle is 17.745deg, the Tx-Reflector-Rx distance is 2x157.493=314.986mm
-	// if c=496um/us the burst will get to receiver after 635us
-	// if c=306um/us the burst will get to receiver after 1036us
-	// 6 pulses at 58kHz are 104us
-	// Time window of interst is from 600us to 1200us
-	
-	#define PGA460_BASE_DIAMETER_UM		(96000) // In micro meters
-	#define PGA460_DISTANCE_UM				(314986) // In micro meters
-	// Conversion factor: half round-trip, microseconds ? seconds
-	#define TOF_US_TO_S   (1e-6f)   // = 1f * 1e-6f
-	#define PGA460_CAPTURE_DELAY_MS				70        // Delay for sensor measurement to complete
-	#define PGA460_EEPROM_WRITE_DELAY_MS	100       // Delay required after writing to EEPROM
-
-	#define PGA_CMD_SIZE				3
-	#define PGA_READ_SIZE				4
-	#define PGA_WRITE_SIZE			5
-	#define PGA_CMD_COUNT				26
-	// PGA460 supports up to 8 objects per measurement
-	#define PGA_MAX_OBJECTS			8
-	// Number of objects we want to track (Must be = PGA_MAX_OBJECTS)
-	#define PGA_OBJECTS_TRACKED	1  
-
-	#if PGA_OBJECTS_TRACKED > PGA_MAX_OBJECTS
-			#error "PGA_OBJECTS_TRACKED cannot be greater than PGA_MAX_OBJECTS!"
-	#endif
-	#define PGA_OBJ_DATA_SIZE (2 + (PGA_OBJECTS_TRACKED * 4))
-
-	// Number of ultrasonic sensors in the array
-	#define ULTRASONIC_SENSOR_COUNT	3	// Number of sensors
-	// Error value for temperature or noise
-	#define PGA460_TEMP_ERR			999.0f
-	
 	// Address 0h-2Bh: EEPROM nonvolatile memory.
 	// Content in these registers is preserved during power cycle and low-power mode.
 	// Address 40h-4Dh and address 5Fh-7Fh: Register-based volatile memory.
@@ -211,7 +176,7 @@ typedef struct __attribute__((packed)) {
     uint8_t TEMP_TRIM;       // 0x28
     uint8_t P1_GAIN_CTRL;    // 0x29
     uint8_t P2_GAIN_CTRL;    // 0x2A
-		//uint8_t EE_CRC;			// 0x2B
+		uint8_t EE_CRC;					 // 0x2B
 } Settings_t;
 
 	typedef struct __attribute__((packed)) {
@@ -343,14 +308,14 @@ typedef struct __attribute__((packed)) {
 typedef struct __attribute__((packed)) {
     uint8_t P1_THR[16]; // 0x5F to 0x6E
     uint8_t P2_THR[16]; // 0x6F to 0x7E
-    //uint8_t THR_CRC;    // 0x7F
+    uint8_t THR_CRC;    // 0x7F
 } Thresholds_t;
 
 typedef struct __attribute__((packed)) {
     uint16_t tof_us;		// Time-of-flight in microseconds (2 bytes)
     uint8_t width;			// Echo width (1 byte)
     uint8_t amplitude;	// Echo amplitude (1 byte)
-		float distance;
+		//float distance; not needed in this application
 } PGA460_Measure_t;
 
 // View of EEPROM bulk image [0x00..0x2B] = userData + TVG + Settings (44 bytes)
