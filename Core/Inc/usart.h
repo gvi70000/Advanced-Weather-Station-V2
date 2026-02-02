@@ -29,7 +29,7 @@ extern "C" {
 #include "main.h"
 
 /* USER CODE BEGIN Includes */
-
+extern volatile uint8_t ust_tx_done;
 /* USER CODE END Includes */
 
 extern UART_HandleTypeDef huart1;

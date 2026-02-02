@@ -63,6 +63,8 @@ void Error_Handler(void);
 #define DECPL1_GPIO_Port GPIOA
 #define DECPL2_Pin GPIO_PIN_2
 #define DECPL2_GPIO_Port GPIOA
+#define SGN_Pin GPIO_PIN_5
+#define SGN_GPIO_Port GPIOA
 #define UST_RX_Pin GPIO_PIN_10
 #define UST_RX_GPIO_Port GPIOB
 #define UST_TX_Pin GPIO_PIN_11
@@ -87,8 +89,6 @@ void Error_Handler(void);
 #define GET_ESP_MSG_Pin GPIO_PIN_12
 #define GET_ESP_MSG_GPIO_Port GPIOA
 #define GET_ESP_MSG_EXTI_IRQn EXTI15_10_IRQn
-#define RST_HDC3020_Pin GPIO_PIN_15
-#define RST_HDC3020_GPIO_Port GPIOA
 #define INT_TCS34717_Pin GPIO_PIN_4
 #define INT_TCS34717_GPIO_Port GPIOB
 #define INT_TSL25911_Pin GPIO_PIN_6
