@@ -21,7 +21,7 @@
 #include "usart.h"
 
 /* USER CODE BEGIN 0 */
-
+volatile uint8_t ust_tx_done = 1;
 /* USER CODE END 0 */
 
 UART_HandleTypeDef huart1;
@@ -325,5 +325,12 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
 }
 
 /* USER CODE BEGIN 1 */
-
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart->Instance == USART3) {
+        // Mark DMA TX complete (used by PGA460 UART helper)
+        ust_tx_done = 1;
+        // Debug marker: frame fully sent
+        HAL_GPIO_WritePin(GPIOA, SGN_Pin, GPIO_PIN_SET);
+    }
+}
 /* USER CODE END 1 */

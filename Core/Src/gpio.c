@@ -50,10 +50,17 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(RST_HDC_GPIO_Port, RST_HDC_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, SGN_Pin|SET_ESP_MSG_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, SET_ESP_MSG_Pin|RST_HDC3020_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(RST_HDC_GPIO_Port, RST_HDC_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin : SGN_Pin */
+  GPIO_InitStruct.Pin = SGN_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  HAL_GPIO_Init(SGN_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : RST_HDC_Pin */
   GPIO_InitStruct.Pin = RST_HDC_Pin;
@@ -62,20 +69,30 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(RST_HDC_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : INT_AS3935_Pin BMP_INT_Pin INT_ES160_Pin INT_TCS34717_Pin
-                           INT_TSL25911_Pin INT_AS7331_Pin */
-  GPIO_InitStruct.Pin = INT_AS3935_Pin|BMP_INT_Pin|INT_ES160_Pin|INT_TCS34717_Pin
-                          |INT_TSL25911_Pin|INT_AS7331_Pin;
+  /*Configure GPIO pin : INT_AS3935_Pin */
+  GPIO_InitStruct.Pin = INT_AS3935_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(INT_AS3935_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : BMP_INT_Pin INT_AS7331_Pin */
+  GPIO_InitStruct.Pin = BMP_INT_Pin|INT_AS7331_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : SET_ESP_MSG_Pin RST_HDC3020_Pin */
-  GPIO_InitStruct.Pin = SET_ESP_MSG_Pin|RST_HDC3020_Pin;
+  /*Configure GPIO pins : INT_ES160_Pin INT_TCS34717_Pin INT_TSL25911_Pin */
+  GPIO_InitStruct.Pin = INT_ES160_Pin|INT_TCS34717_Pin|INT_TSL25911_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : SET_ESP_MSG_Pin */
+  GPIO_InitStruct.Pin = SET_ESP_MSG_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  HAL_GPIO_Init(SET_ESP_MSG_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : GET_ESP_MSG_Pin */
   GPIO_InitStruct.Pin = GET_ESP_MSG_Pin;
