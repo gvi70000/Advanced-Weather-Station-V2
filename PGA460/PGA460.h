@@ -397,4 +397,5 @@ HAL_StatusTypeDef PGA460_GetSystemDiagnostics(const uint8_t sensorID, const uint
 
 float PGA460_ReadTemperatureOrNoise(const uint8_t sensorID, const PGA460_CmdType_t mode);
 
+HAL_StatusTypeDef PGA460_MeasureWind(PGA460_Wind_t *out);
 #endif // PGA460_H

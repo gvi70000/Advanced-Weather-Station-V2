@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <math.h>
 #include "usart.h"
+#include "tim.h"
 #include "PGA460.h"
 #include "debug.h"
 
@@ -43,10 +44,10 @@ extern UART_HandleTypeDef huart3;
 // 6 pulses at 58kHz are 104us
 // Time window of interst is from 600us to 1200us
 	
-#define PGA460_BASE_DIAMETER_UM		(96000) // In micro meters
-#define PGA460_DISTANCE_UM				(314986) // In micro meters
-#define PGA460_CAPTURE_DELAY_MS				70        // Delay for sensor measurement to complete
-#define PGA460_EEPROM_WRITE_DELAY_MS	100       // Delay required after writing to EEPROM
+#define PGA460_BASE_DIAMETER_UM				96000		// In micro meters
+#define PGA460_DISTANCE_UM						314986	// In micro meters
+#define PGA460_CAPTURE_DELAY_MS				70			// Delay for sensor measurement to complete
+#define PGA460_EEPROM_WRITE_DELAY_MS	100			// Delay required after writing to EEPROM
 
 #define PGA_CMD_SIZE				3
 #define PGA_READ_SIZE				4
@@ -62,6 +63,8 @@ extern UART_HandleTypeDef huart3;
 
 #define ULTRASONIC_SENSOR_COUNT	3	// Number of ultrasonic sensors in the array
 #define PGA460_TEMP_ERR			999.0f // Error value for temperature or noise
+
+#define TICK_TO_US(t) ((float)(t) * 0.00588235294117647058823529411765f)
 	
 const PGA460_Regs_t s0 = {
 		.EEData.UserData = {0}, // 0x00..0x13
@@ -177,6 +180,12 @@ const PGA460_Regs_t s2 = {
 		}
 	};
 
+
+// UART3 DMA TX completion flag
+extern volatile uint8_t ust_tx_done;
+// Array to hold the moment in time when the DECPL pin of each PGA460 goes high filled by TIM2 CH1/2/3 DM
+static volatile uint32_t DecplTimes[ULTRASONIC_SENSOR_COUNT] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
+	
 // --- Array with 3 elements(sensors): [0] TVG, [1] Settings, [2] Thresholds ---
 PGA460_Sensor_t sensors[ULTRASONIC_SENSOR_COUNT] = {
 { .Registers = s0 }, { .Registers = s1 }, { .Registers = s2 }};
@@ -198,6 +207,15 @@ PGA460_EnvData_t externalData = {
 };
 
 float soundSpeed = 343.0f;
+
+// Start the timers before sending data on UART to PGA
+static void StartDecoupleWatch() {
+	HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_1, (uint32_t *)(void *)&DecplTimes[0], 1); // DECPL on tranducer 0
+	HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_2, (uint32_t *)(void *)&DecplTimes[1], 1); // DECPL on tranducer 1
+	HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_3, (uint32_t *)(void *)&DecplTimes[2], 1); // DECPL on tranducer 2
+	// Set signal pin low, it goes high when the transmission ends
+	HAL_GPIO_WritePin(GPIOA, SGN_Pin, GPIO_PIN_RESET);
+}
 
 static float PGA460_ComputeSoundSpeed(PGA460_EnvData_t *env) {
     if (!env) return 343.0f;
@@ -923,3 +941,4 @@ float PGA460_ReadTemperatureOrNoise(const uint8_t sensorID, const PGA460_CmdType
 	}
 	return result;
 }
+
