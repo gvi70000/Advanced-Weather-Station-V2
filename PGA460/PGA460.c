@@ -184,8 +184,9 @@ const PGA460_Regs_t s2 = {
 // UART3 DMA TX completion flag
 extern volatile uint8_t ust_tx_done;
 // Array to hold the moment in time when the DECPL pin of each PGA460 goes high filled by TIM2 CH1/2/3 DM
-static volatile uint32_t DecplTimes[ULTRASONIC_SENSOR_COUNT] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
-
+extern volatile DecplTimes_t  ToF_Result[3];  
+extern volatile uint8_t Decpl_RDY;
+	
 // --- Array with 3 elements(sensors): [0] TVG, [1] Settings, [2] Thresholds ---
 PGA460_Sensor_t sensors[ULTRASONIC_SENSOR_COUNT] = {
 { .Registers = s0 }, { .Registers = s1 }, { .Registers = s2 }};
@@ -207,15 +208,6 @@ PGA460_EnvData_t externalData = {
 };
 
 float soundSpeed = 343.0f;
-
-// Start the timers before sending data on UART to PGA
-static void StartDecoupleWatch() {
-	HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_1, (uint32_t *)(void *)&DecplTimes[0], 1); // DECPL on tranducer 0
-	HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_2, (uint32_t *)(void *)&DecplTimes[1], 1); // DECPL on tranducer 1
-	HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_3, (uint32_t *)(void *)&DecplTimes[2], 1); // DECPL on tranducer 2
-	// Set signal pin low, it goes high when the transmission ends
-	HAL_GPIO_WritePin(GPIOA, SGN_Pin, GPIO_PIN_RESET);
-}
 
 static float PGA460_ComputeSoundSpeed(PGA460_EnvData_t *env) {
     if (!env) return 343.0f;
@@ -942,3 +934,44 @@ float PGA460_ReadTemperatureOrNoise(const uint8_t sensorID, const PGA460_CmdType
 	return result;
 }
 
+// Gets 3 pairs of ToF readings coresponding to a full cycle
+// at [0].E0 we have Tx0Rx1, at [0].E1 we have Tx0Rx2
+// at [1].E0 we have Tx1Rx0, at [0].E1 we have Tx1Rx2
+// at [2].E0 we have Tx2Rx0, at [0].E1 we have Tx2Rx1
+void getCycleToF(DecplTimes_t *reading) {
+	uint32_t OffsetTime[2] = {0, 0};
+	for (uint8_t i = 0; i < 3; i++) {
+		uint8_t Tx = i;													// Transmitter index
+		uint8_t Rx1 = (i == 0) ? 1 : 0;					// Receiver1 index
+		uint8_t Rx2 = (uint8_t)(3 - Tx - Rx1);	// Receiver2 index
+		// Start the timers
+		HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_1, (uint32_t*)&ToF_Result[0].E0, 2); // DECPL on tranducer 0
+		HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_2, (uint32_t*)&ToF_Result[1].E0, 2); // DECPL on tranducer 1
+		HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_3, (uint32_t*)&ToF_Result[2].E0, 2); // DECPL on tranducer 2
+		// Send commands to PGAs
+		PGA460_UltrasonicCmd(Rx1, PGA460_CMD_BROADCAST_BURST_AND_LISTEN_P2, 1); // We can use any sensor ID since is broadcast
+		PGA460_UltrasonicCmd(Tx, PGA460_CMD_BURST_AND_LISTEN_PRESET1, 1); // Wait 5ms or the interrupt ready
+		// Wait for listening window to close
+		// ToDo Find a diffrent way
+		uint32_t endTime = HAL_GetTick() + 5;
+		while(HAL_GetTick()< endTime) {}
+		// Stop the timers or wait DMA interrupt?	
+		HAL_TIM_IC_Stop_DMA(&htim2, TIM_CHANNEL_1); // DECPL on tranducer 0
+		HAL_TIM_IC_Stop_DMA(&htim2, TIM_CHANNEL_2); // DECPL on tranducer 1
+		HAL_TIM_IC_Stop_DMA(&htim2, TIM_CHANNEL_3); // DECPL on tranducer 2
+		// Set signal pin low, it goes high when the transmission ends
+		HAL_GPIO_WritePin(GPIOA, SGN_Pin, GPIO_PIN_RESET);
+		// Read DecplTimes and calculate Offsets
+		// Offset = Sender time - receiver time
+		// ToF_Result[Tx].E0 is triggerd by the BROADCAST_BURST_AND_LISTEN_P2, so we do not need it
+		// ToF_Result[Tx].E1 is triggerd by the BURST_AND_LISTEN_PRESET1, the actual burst
+		OffsetTime[Rx1] = ToF_Result[Tx].E1 - ToF_Result[Rx1].E0;
+		OffsetTime[Rx2] = ToF_Result[Tx].E1 - ToF_Result[Rx2].E0;
+		// Read ToF
+		reading[Tx].E0 = PGA460_GetUltrasonicMeasurement(Rx1);
+		reading[Tx].E1 = PGA460_GetUltrasonicMeasurement(Rx2);
+		// Remove Offset
+		reading[Tx].E0 -= OffsetTime[Rx1];
+		reading[Tx].E1 -= OffsetTime[Rx2];
+	}
+}
