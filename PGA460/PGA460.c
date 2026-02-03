@@ -185,7 +185,7 @@ const PGA460_Regs_t s2 = {
 extern volatile uint8_t ust_tx_done;
 // Array to hold the moment in time when the DECPL pin of each PGA460 goes high filled by TIM2 CH1/2/3 DM
 static volatile uint32_t DecplTimes[ULTRASONIC_SENSOR_COUNT] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
-	
+
 // --- Array with 3 elements(sensors): [0] TVG, [1] Settings, [2] Thresholds ---
 PGA460_Sensor_t sensors[ULTRASONIC_SENSOR_COUNT] = {
 { .Registers = s0 }, { .Registers = s1 }, { .Registers = s2 }};
