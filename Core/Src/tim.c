@@ -21,13 +21,8 @@
 #include "tim.h"
 
 /* USER CODE BEGIN 0 */
-typedef struct __attribute__((packed)) {
-    uint32_t	E0;	// Rising Edge recorded on broadcasting BURST_AND_LISTEN_P2
-    uint32_t	E1;	// Rising Edge recorded on BURST_AND_LISTEN_PRESET1 for specific Tx
-} DecplTimes_t;
-
-volatile DecplTimes_t  ToF_Result[ULTRASONIC_SENSOR_COUNT] = {{0, 0}, {0, 0}, {0, 0}};  
-volatile Decpl_RDY = 0;
+volatile DecplTimes_t  ToF_Result[3] = {{0, 0}, {0, 0}, {0, 0}};  
+volatile uint8_t Decpl_RDY = 0;
 /* USER CODE END 0 */
 
 TIM_HandleTypeDef htim2;
@@ -51,7 +46,7 @@ void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 16; // 170MHz / (16+1) = 10 MHz -> 100 ns per tick
+  htim2.Init.Prescaler = 0;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 4294967295;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -91,6 +86,7 @@ void MX_TIM2_Init(void)
   {
     Error_Handler();
   }
+  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
   if (HAL_TIM_IC_ConfigChannel(&htim2, &sConfigIC, TIM_CHANNEL_4) != HAL_OK)
   {
     Error_Handler();
@@ -223,11 +219,9 @@ void HAL_TIM_Base_MspDeInit(TIM_HandleTypeDef* tim_baseHandle)
 /* USER CODE BEGIN 1 */
 /* DMA Transfer Complete Callback */
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
-    // We use only TIM2, so 
+	// We use only TIM2, so 
 	if (htim->Channel < TIM_CHANNEL_4 ) {
 		Decpl_RDY = 1;
-    }
+	}
 }
 /* USER CODE END 1 */
-
-
