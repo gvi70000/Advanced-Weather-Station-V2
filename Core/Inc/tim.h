@@ -29,7 +29,13 @@ extern "C" {
 #include "main.h"
 
 /* USER CODE BEGIN Includes */
+typedef struct __attribute__((packed)) {
+    uint32_t	E0;	// Rising Edge recorded on broadcasting BURST_AND_LISTEN_P2
+    uint32_t	E1;	// Rising Edge recorded on BURST_AND_LISTEN_PRESET1 for specific Tx
+} DecplTimes_t;
 
+extern volatile DecplTimes_t  ToF_Result[ULTRASONIC_SENSOR_COUNT];  
+extern volatile Decpl_RDY;
 /* USER CODE END Includes */
 
 extern TIM_HandleTypeDef htim2;
