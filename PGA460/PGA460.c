@@ -8,14 +8,20 @@
 #include "PGA460.h"
 #include "debug.h"
 
+extern UART_HandleTypeDef huart3;
+// Timeout for blocking UART transfers (ms). Increase for low baud rates.
+#define PGA460_UART_TIMEOUT_MS  50U
+// Array to hold the moment in time when the DECPL pin of each PGA460 goes high filled by TIM2 CH1/2/3 DM
+extern volatile DecplTimes_t  ToF_Result[3];  
+extern volatile uint8_t Decpl_RDY;
+
+
 #ifndef M_PI
 	#define M_PI 3.14159265358979323846
 #endif
 
-extern UART_HandleTypeDef huart3;
-
 // Reflection Path Length
-#define DISTANCE						0.15588f           // Total reflection path length in meters
+#define DISTANCE						0.15588f		// Total reflection path length in meters
 
 #define R_D									287.05f			// Specific gas constant for dry air (J/kg·K)
 #define R_V									461.495f		// Specific gas constant for water vapor (J/kg·K)
@@ -47,7 +53,6 @@ extern UART_HandleTypeDef huart3;
 #define PGA460_BASE_DIAMETER_UM				96000		// In micro meters
 #define PGA460_DISTANCE_UM						314986	// In micro meters
 #define PGA460_CAPTURE_DELAY_MS				70			// Delay for sensor measurement to complete
-#define PGA460_EEPROM_WRITE_DELAY_MS	100			// Delay required after writing to EEPROM
 
 #define PGA_CMD_SIZE				3
 #define PGA_READ_SIZE				4
@@ -181,11 +186,7 @@ const PGA460_Regs_t s2 = {
 	};
 
 
-// UART3 DMA TX completion flag
-extern volatile uint8_t ust_tx_done;
-// Array to hold the moment in time when the DECPL pin of each PGA460 goes high filled by TIM2 CH1/2/3 DM
-extern volatile DecplTimes_t  ToF_Result[3];  
-extern volatile uint8_t Decpl_RDY;
+
 	
 // --- Array with 3 elements(sensors): [0] TVG, [1] Settings, [2] Thresholds ---
 PGA460_Sensor_t sensors[ULTRASONIC_SENSOR_COUNT] = {
@@ -211,11 +212,9 @@ float soundSpeed = 343.0f;
 
 static float PGA460_ComputeSoundSpeed(PGA460_EnvData_t *env) {
     if (!env) return 343.0f;
-
     // --- Temperature ---
     const double T_C = (double)env->Temperature;
     const double T_K = T_C + KELVIN_OFFSET;
-
     // --- Pressure (hPa). If not provided, estimate from height with std. atmosphere (0–11 km) ---
     double P_hPa = (double)env->Pressure;
     if (P_hPa <= 0.0) {
@@ -229,29 +228,21 @@ static float PGA460_ComputeSoundSpeed(PGA460_EnvData_t *env) {
         P_hPa = P_Pa * 0.01;        // convert Pa ? hPa
         env->Pressure = (float)P_hPa;
     }
-
     // --- Relative humidity as fraction ---
     const double RH_frac = ((double)env->RH) / RH_DIVISOR;
-
     // --- Saturation vapor pressure over water (Tetens, hPa) ---
     // es = 6.1078 * exp(17.2693882 * T_C / (T_C + 237.3))
     const double es = SATURATION_CONSTANT * exp(17.2693882 * T_C / (T_C + 237.3));
-
     // Actual vapor pressure (hPa)
     const double e = RH_frac * es;
-
     // Mixing ratio (kg/kg); 0.62198 ˜ Rd/Rv ratio factor
     const double w = 0.62198 * e / fmax(1e-6, (P_hPa - e));
-
     // Specific humidity
     const double q = w / (1.0 + w);
-
     // Virtual temperature Tv = T * (1 + (Rv/Rd - 1)*q); WATER_VAPOR_EFFECT ˜ 0.6077
     const double Tv = T_K * (1.0 + WATER_VAPOR_EFFECT * q);
-
     // Speed of sound in moist air: c = sqrt(gamma * Rd * Tv)
     const double c = sqrt(GAMMA * R_D * Tv);
-
     env->SoundSpeed = (float)c;
     return (float)c;
 }
@@ -315,7 +306,7 @@ static void PGA460_ReadAndPrintEEPROM(uint8_t sensorID) {
 		} else {
 			printf("  Address 0x%02X: FAILED to read\n", regAddr);
 		}
-		HAL_Delay(PGA460_CAPTURE_DELAY_MS);
+		HAL_Delay(100);
 	}
 	printf("EEPROM individual read complete.\n");
 }
@@ -335,9 +326,9 @@ static uint8_t PGA460_CalculateChecksum(const uint8_t *data, uint8_t len) {
 
 static HAL_StatusTypeDef PGA460_SetEEPROMAccess(const uint8_t sensorID, const uint8_t unlock) {
 	uint8_t accessByte = unlock ? PGA460_UNLOCK_EEPROM : PGA460_LOCK_EEPROM;
-	uint8_t cmd[5] = {PGA460_SYNC, (uint8_t)((sensorID << 5) | (PGA460_CMD_REGISTER_WRITE)), REG_EE_CTRL, accessByte, 0x00};
+	uint8_t cmd[5] = {PGA460_SYNC, (uint8_t)((sensorID << 5) | PGA460_CMD_REGISTER_WRITE), REG_EE_CTRL, accessByte, 0};
 	cmd[4] = PGA460_CalculateChecksum(&cmd[1], 3); // Checksum over CMD, ADDR, DATA
-	if (HAL_UART_Transmit(&huart3, cmd, sizeof(cmd), UART_TIMEOUT) != HAL_OK) {
+	if (HAL_UART_Transmit(&huart3, cmd, sizeof(cmd), PGA460_UART_TIMEOUT_MS) != HAL_OK) {
 		DEBUG("Sensor %d: EEPROM %s failed\n", sensorID, unlock ? "unlock" : "lock");
 		return HAL_ERROR;
 	}
@@ -347,14 +338,104 @@ static HAL_StatusTypeDef PGA460_SetEEPROMAccess(const uint8_t sensorID, const ui
 }
 
 
+void PGA460_ScanAndReport(void) {
+    uint8_t regValue = 0;
+    uint8_t foundCount = 0;
+
+    printf("\n--- Starting PGA460 Bus Scan (Addresses 0-7) ---\n");
+
+    for (uint8_t addr = 0; addr <= 7; addr++) {
+        // We use a shorter timeout for scanning to keep it fast
+        if (PGA460_RegisterRead(addr, REG_PULSE_P2, &regValue) == HAL_OK) {
+            foundCount++;
+            
+            // Extract the address bits [7:5] from the register value
+            uint8_t internalAddr = (regValue >> 5);
+            uint8_t pulseCount = (regValue & 0x1F);
+
+            printf("  [+] SENSOR FOUND at UART Address: %u\n", addr);
+            printf("      -> Internal Register Address: %u\n", internalAddr);
+            printf("      -> Pulse Count (P2): %u\n", pulseCount);
+            
+            if (addr != internalAddr) {
+                printf("      [!] WARNING: Address Mismatch! (Listening on %u, Stored as %u)\n", addr, internalAddr);
+            }
+        }
+        // Small delay to let the UART bus settle between pings
+        HAL_Delay(10); 
+    }
+
+    if (foundCount == 0) {
+        printf("  [-] No sensors detected on the bus. Check power and wiring.\n");
+    } else {
+        printf("--- Scan Complete. Found %u sensor(s). ---\n\n", foundCount);
+    }
+}
+HAL_StatusTypeDef PGA460_WriteUARTAddr(uint8_t targetAddr) {
+uint8_t foundAddr = 0xFF;
+    uint8_t regP2 = 0;
+    uint8_t eeStatus = 0;
+
+    // 1. SCAN: Find which address (0-7) responds
+    for (uint8_t a = 0; a <= 7; a++) {
+        if (PGA460_RegisterRead(a, REG_PULSE_P2, &regP2) == HAL_OK) {
+            foundAddr = a;
+            DEBUG("Found sensor at %u (Register says %u)\n", a, regP2);
+            break;
+        }
+    }
+
+    if (foundAddr == 0xFF) {
+        DEBUG("No sensor found on bus.\n");
+        return HAL_ERROR;
+    }
+
+    // 2. WAKE UP: Move digital core to READY state
+    // Mandatory before EEPROM operations.
+    PGA460_SetThresholds(foundAddr);
+    HAL_Delay(50);
+
+    // 3. RAM UPDATE: Set new address and ensure P2_PULSE = 0
+    // Based on your requirement: targetAddr << 5
+    uint8_t writeVal = (targetAddr << 5); 
+    PGA460_RegisterWrite(foundAddr, REG_PULSE_P2, writeVal);
+    HAL_Delay(50);
+
+    // 4. TI UNLOCK & BURN: Make it permanent
+    // We now talk to targetAddr because RAM update is instant
+    DEBUG("Burning Address %u to EEPROM...\n", targetAddr);
+    
+    // Unlock Sequence (Register 0x40)
+    PGA460_RegisterWrite(targetAddr, 0x40, 0x68);
+    PGA460_RegisterWrite(targetAddr, 0x40, 0x69);
+    
+    // Command 22: EEPROM Burn
+    if (PGA460_BurnEEPROM(targetAddr) != HAL_OK) {
+        DEBUG("Burn Command failed to send.\n");
+        return HAL_ERROR;
+    }
+
+    // 5. WAIT & VERIFY
+    HAL_Delay(100); // Wait for physical EEPROM write
+    
+    PGA460_RegisterRead(targetAddr, 0x40, &eeStatus);
+    if (eeStatus & 0x80) {
+        DEBUG("EEPROM ERROR: 0x%02X. Burn rejected.\n", eeStatus);
+        return HAL_ERROR;
+    }
+
+    DEBUG("SUCCESS: Sensor set to Address %u\n", targetAddr);
+    return HAL_OK;
+}
+
+
 // Function to initialize 3x PGA460 sensors
 HAL_StatusTypeDef PGA460_Init(uint8_t burnEEPROM) {
-	for (uint8_t i = 0; i < ULTRASONIC_SENSOR_COUNT; ++i) {
+	for (uint8_t i = 2; i < ULTRASONIC_SENSOR_COUNT; ++i) {
 		// Step 1: Assign transducer config and reset measures
-		HAL_Delay(PGA460_EEPROM_WRITE_DELAY_MS);
-		sensors[i].Measures.tof_us  = 0;
-		sensors[i].Measures.width     = 0;
-		sensors[i].Measures.amplitude = 0;
+		sensors[i].Measures.tof_us		= 0;
+		sensors[i].Measures.width			= 0;
+		sensors[i].Measures.amplitude	= 0;
 		// Step 2: Threshold write (uses current sensors[i].Registers.THR) !!! Mandatory step to start the sensor
 		if (PGA460_SetThresholds(i) != HAL_OK) {
 			DEBUG("Sensor %u: Threshold write failed!\n", i);
@@ -380,32 +461,33 @@ HAL_StatusTypeDef PGA460_Init(uint8_t burnEEPROM) {
 //				return HAL_ERROR;
 //		}
 		// Step 5: Diagnostics/status
-		if (PGA460_CheckStatus(i) != HAL_OK) {
-			DEBUG("Sensor %u: Status check failed!\n", i);
-			return HAL_ERROR;
-		}
-		// Frequency (Hz) via system diagnostics (diag=0)
-		float diagVal = 0.0f;
-		if (PGA460_GetSystemDiagnostics(i, 1, 0, &diagVal) == HAL_OK)
-				DEBUG("Sensor %u: Frequency Diagnostic = %.2f Hz\n", i, diagVal);
-		if (PGA460_GetSystemDiagnostics(i, 0, 1, &diagVal) == HAL_OK)
-				DEBUG("Sensor %u: Decay Period Diagnostic = %.2f us\n", i, diagVal);
-		if (PGA460_GetSystemDiagnostics(i, 0, 2, &diagVal) == HAL_OK)
-				DEBUG("Sensor %u: Die Temperature = %.2f C\n", i, diagVal);
-		if (PGA460_GetSystemDiagnostics(i, 0, 3, &diagVal) == HAL_OK)
-				DEBUG("Sensor %u: Noise Level = %.0f\n", i, diagVal);
-		// Step 7: Optional Echo Data Dump for verification
-		uint8_t echoBuf[128];
-		if (PGA460_GetEchoDataDump(i, PGA460_CMD_BURST_AND_LISTEN_PRESET1, echoBuf) != HAL_OK) {
-			DEBUG("Sensor %u: Echo Data Dump failed!\n", i);
-			return HAL_ERROR;
-		}
+//		if (PGA460_CheckStatus(i) != HAL_OK) {
+//			DEBUG("Sensor %u: Status check failed!\n", i);
+//			//return HAL_ERROR;
+//		}
+//		// Frequency (Hz) via system diagnostics (diag=0)
+//		float diagVal = 0.0f;
+//		if (PGA460_GetSystemDiagnostics(i, 1, 0, &diagVal) == HAL_OK)
+//				DEBUG("Sensor %u: Frequency Diagnostic = %.2f Hz\n", i, diagVal);
+//		if (PGA460_GetSystemDiagnostics(i, 0, 1, &diagVal) == HAL_OK)
+//				DEBUG("Sensor %u: Decay Period Diagnostic = %.2f us\n", i, diagVal);
+//		if (PGA460_GetSystemDiagnostics(i, 0, 2, &diagVal) == HAL_OK)
+//				DEBUG("Sensor %u: Die Temperature = %.2f C\n", i, diagVal);
+//		if (PGA460_GetSystemDiagnostics(i, 0, 3, &diagVal) == HAL_OK)
+//				DEBUG("Sensor %u: Noise Level = %.0f\n", i, diagVal);
+//		// Step 7: Optional Echo Data Dump for verification
+//		uint8_t echoBuf[128];
+//		if (PGA460_GetEchoDataDump(i, PGA460_CMD_BURST_AND_LISTEN_PRESET1, echoBuf) != HAL_OK) {
+//			DEBUG("Sensor %u: Echo Data Dump failed!\n", i);
+//			return HAL_ERROR;
+//		}
+		
 //		DEBUG("Sensor %u: Echo Data Dump:\n", i);
 //		for (uint8_t j = 0; j < 128; ++j) {
 //			DEBUG("%u%s", echoBuf[j], (j < 127) ? "," : "\n");
 //		}
 		DEBUG("-----\n");
-		HAL_Delay(PGA460_EEPROM_WRITE_DELAY_MS);
+		HAL_Delay(100);
 	}
 	return HAL_OK;
 }
@@ -413,17 +495,12 @@ HAL_StatusTypeDef PGA460_Init(uint8_t burnEEPROM) {
 
 HAL_StatusTypeDef PGA460_RegisterRead(uint8_t sensorID, uint8_t regAddr, uint8_t *regValue) {
 	// --- TX frame: [SYNC][CMD][REG_ADDR][CHK] ---
-	uint8_t tx[4];
-	tx[0] = PGA460_SYNC; // 0x55
-  // UART_ADDR is stored in PULSE_P2[7:5] (EEPROM reg 0x1F)
-	tx[1] = (uint8_t)((sensorID << 5) | (PGA460_CMD_REGISTER_READ)); // Command code
-	tx[2] = regAddr;                               // Register address
-	tx[3] = PGA460_CalculateChecksum(&tx[1], 2);   // Checksum over CMD + REG_ADDR
-	if (HAL_UART_Transmit(&huart3, tx, sizeof(tx), UART_TIMEOUT) != HAL_OK) return HAL_ERROR;
+	uint8_t cmd[4] = {PGA460_SYNC, (uint8_t)((sensorID << 5) | PGA460_CMD_REGISTER_READ), regAddr, 0};
+	cmd[3] = PGA460_CalculateChecksum(&cmd[1], 2); // Checksum over CMD + REG_ADDR
+	if (HAL_UART_Transmit(&huart3, cmd, sizeof(cmd), PGA460_UART_TIMEOUT_MS) != HAL_OK) return HAL_ERROR;
 	// --- RX frame: [DIAG][DATA][CHK] ---
-	uint8_t rx[3] = {0};
-	if (HAL_UART_Receive(&huart3, rx, sizeof(rx), UART_TIMEOUT) != HAL_OK) return HAL_ERROR;
-	*regValue = rx[1]; // DATA byte
+	if (HAL_UART_Receive(&huart3, cmd, 3, PGA460_UART_TIMEOUT_MS) != HAL_OK) return HAL_ERROR;
+	*regValue = cmd[1]; // DATA byte
 	return HAL_OK;
 }
 
@@ -431,16 +508,12 @@ HAL_StatusTypeDef PGA460_RegisterRead(uint8_t sensorID, uint8_t regAddr, uint8_t
 // Function to write a register on the PGA460
 HAL_StatusTypeDef PGA460_RegisterWrite(uint8_t sensorID, uint8_t regAddr, uint8_t regValue) {
 	// TX frame: [SYNC][CMD][REG_ADDR][REG_VALUE][CHK]
-	uint8_t tx[5];
-	tx[0] = PGA460_SYNC;                       // 0x55
-	tx[1] = (uint8_t)((sensorID << 5) | (PGA460_CMD_REGISTER_WRITE));              // Command code
-	tx[2] = regAddr;                           // register address
-	tx[3] = regValue;                          // value to write
-	tx[4] = PGA460_CalculateChecksum(&tx[1], 3); // checksum over CMD+ADDR+DATA
-	if (HAL_UART_Transmit(&huart3, tx, sizeof(tx), UART_TIMEOUT) != HAL_OK)
-		return HAL_ERROR;
-	// Small settle time (keep if you observed the device needing it)
-	HAL_Delay(10);
+	uint8_t cmd[5] = {PGA460_SYNC, (uint8_t)((sensorID << 5) | PGA460_CMD_REGISTER_WRITE), regAddr, regValue, 0};
+	cmd[4] = PGA460_CalculateChecksum(&cmd[1], 3); // checksum over CMD+ADDR+DATA
+	if (HAL_UART_Transmit(&huart3, cmd, sizeof(cmd), PGA460_UART_TIMEOUT_MS) != HAL_OK) return HAL_ERROR;
+	// For commands 10 and 22: Wait 60 µs if INIT_GAIN, TVG, THR or P1_GAIN_CTRL or P2_GAIN_CTRL
+	// is written to before a read, otherwise wait 3.3 µs for other functions.
+	HAL_Delay(1); // Increase to 10 if needed
 	return HAL_OK;
 }
 
@@ -495,11 +568,11 @@ HAL_StatusTypeDef PGA460_EEPROMBulkWrite(uint8_t sensorID) {
 	memcpy(&frame[2], &sensors[sensorID].Registers.EEData, 44); // 44 bytes
 	frame[45] = PGA460_CalculateChecksum(&frame[1], 44); // Checksum over CMD + EEPROM bytes
 	// Step 4: Transmit
-	if (HAL_UART_Transmit(&huart3, frame, sizeof(frame), UART_TIMEOUT) != HAL_OK) {
+	if (HAL_UART_Transmit(&huart3, frame, sizeof(frame), PGA460_UART_TIMEOUT_MS) != HAL_OK) {
 		DEBUG("Sensor %d: EEPROM Bulk Write Failed!\n", sensorID);
 		return HAL_ERROR;
 	}
-	HAL_Delay(PGA460_EEPROM_WRITE_DELAY_MS);  // Wait for EEPROM write
+	HAL_Delay(1);  // Wait for EEPROM write
 	if (PGA460_SetEEPROMAccess(sensorID, 0) != HAL_OK) {
 		DEBUG("Sensor %d: EEPROM lock failed after bulk write\n", sensorID);
 		return HAL_ERROR;
@@ -509,35 +582,41 @@ HAL_StatusTypeDef PGA460_EEPROMBulkWrite(uint8_t sensorID) {
 
 
 HAL_StatusTypeDef PGA460_BurnEEPROM(uint8_t sensorID) {
-	// Step 1: Unlock EEPROM (EE_UNLCK=0xD, EE_PRGM=0) => 0x68
-	if (PGA460_RegisterWrite(sensorID, REG_EE_CTRL, PGA460_UNLOCK_EEPROM) != HAL_OK) {
-		DEBUG("Sensor %d: EEPROM Burn Step 1 (0x68) Failed!\n", sensorID);
-		return HAL_ERROR;
-	}
-	HAL_Delay(1); // short delay per datasheet
-	// Step 2: Trigger EEPROM burn (EE_UNLCK=0xD, EE_PRGM=1) => 0x69
-	if (PGA460_RegisterWrite(sensorID, REG_EE_CTRL, PGA460_LOCK_EEPROM) != HAL_OK) {
-		DEBUG("Sensor %d: EEPROM Burn Step 2 (0x69) Failed!\n", sensorID);
-		return HAL_ERROR;
-	}
-	// EEPROM programming time TYP 600ms
-	HAL_Delay(650);
-	// Step 3: Read back EE_CTRL to verify
-	uint8_t ctrlVal = 0;
-	if (PGA460_RegisterRead(sensorID, REG_EE_CTRL, &ctrlVal) != HAL_OK) {
-		DEBUG("Sensor %d: Failed to read EE_CTRL after burn!\n", sensorID);
-		return HAL_ERROR;
-	}
-	sensors[sensorID].Registers.eeCtrl.Val.Value = ctrlVal;
-	// Step 4: Check EE_PRGM_OK (bit 2)
-	if (sensors[sensorID].Registers.eeCtrl.Val.BitField.EE_PRGM_OK) {
-		if(PGA460_RegisterWrite(sensorID, REG_EE_CTRL, 0x00) != HAL_OK)
-			return HAL_ERROR;
-		return HAL_OK;
-	} else {
-		DEBUG("Sensor %d: EEPROM Burn Failed (EE_CTRL = 0x%02X)\n", sensorID, ctrlVal);
-		return HAL_ERROR;
-	}
+    uint8_t burnStat = 0;
+
+    // 1. Unlock EEPROM (0x68)
+    if (PGA460_RegisterWrite(sensorID, 0x40, 0x68) != HAL_OK) {
+        return HAL_ERROR;
+    }
+    
+    HAL_Delay(1); // Short pause between unlock steps
+
+    // 2. Trigger Burn (0x69)
+    // Writing 0x69 sets the EEPRGM bit which initiates the internal charge pump
+    if (PGA460_RegisterWrite(sensorID, 0x40, 0x69) != HAL_OK) {
+        return HAL_ERROR;
+    }
+
+    // 3. WAIT (Crucial!) 
+    // TI uses 1000ms. The process is slow. Do not interrupt the sensor here.
+    HAL_Delay(1000);
+
+    // 4. Read back status from EE_CNTRL
+    if (PGA460_RegisterRead(sensorID, 0x40, &burnStat) != HAL_OK) {
+        return HAL_ERROR;
+    }
+
+    // 5. Check Bit 2 (EE_PRGM_OK)
+    if ((burnStat & 0x04) == 0x04) {
+        DEBUG("Sensor %u: EEPROM Burn Successful (Status: 0x%02X)\n", sensorID, burnStat);
+        
+        // TI-style cleanup: Set back to 0 to lock
+        PGA460_RegisterWrite(sensorID, 0x40, 0x00);
+        return HAL_OK;
+    } else {
+        DEBUG("Sensor %u: Burn Failed (Status: 0x%02X, expected bit 2 set)\n", sensorID, burnStat);
+        return HAL_ERROR;
+    }
 }
 
 
@@ -549,13 +628,13 @@ HAL_StatusTypeDef PGA460_GetTVG(uint8_t sensorID) {
 	tx[1] = (uint8_t)((sensorID << 5) | (PGA460_CMD_TVG_BULK_READ)); // Command code
 	tx[2] = PGA460_CalculateChecksum(&tx[1], 1);
 	
-	if (HAL_UART_Transmit(&huart3, tx, sizeof(tx), UART_TIMEOUT) != HAL_OK) {
+	if (HAL_UART_Transmit(&huart3, tx, sizeof(tx), PGA460_UART_TIMEOUT_MS) != HAL_OK) {
 		return HAL_ERROR;
 	}
 	// --- Step 2: Receive DIAG + 7 TVG bytes ---
 	// RX: [DIAG][TVGAIN0..TVGAIN6] => 1 + 7 = 8 bytes
 	uint8_t rx[8] = {0};
-	if (HAL_UART_Receive(&huart3, rx, sizeof(rx), UART_TIMEOUT) != HAL_OK) {
+	if (HAL_UART_Receive(&huart3, rx, sizeof(rx), PGA460_UART_TIMEOUT_MS) != HAL_OK) {
 		return HAL_ERROR;
 	}
 	// Optional: detect idle flood (all 0xFF)
@@ -586,7 +665,7 @@ HAL_StatusTypeDef PGA460_SetTVG(uint8_t sensorID, PGA460_GainRange_t gain_range,
 	frame[1] = (uint8_t)((sensorID << 5) | (PGA460_CMD_TVG_BULK_WRITE));
 	memcpy(&frame[2], tvg, sizeof(TVG_t)); // 7 bytes payload
 	frame[9] = PGA460_CalculateChecksum(&frame[1], 1 + sizeof(TVG_t)); // checksum over CMD+DATA
-	if (HAL_UART_Transmit(&huart3, frame, sizeof(frame), UART_TIMEOUT) != HAL_OK) {
+	if (HAL_UART_Transmit(&huart3, frame, sizeof(frame), PGA460_UART_TIMEOUT_MS) != HAL_OK) {
 		return HAL_ERROR;
 	}
 	// Mirror locally on success
@@ -604,12 +683,12 @@ HAL_StatusTypeDef PGA460_GetThresholds(uint8_t sensorID) {
 	tx[1] = (uint8_t)((sensorID << 5) | (PGA460_CMD_THRESHOLD_BULK_READ)); // Command code
 	tx[2] = PGA460_CalculateChecksum(&tx[1], 1);
 	
-	if (HAL_UART_Transmit(&huart3, tx, sizeof(tx), UART_TIMEOUT) != HAL_OK) {
+	if (HAL_UART_Transmit(&huart3, tx, sizeof(tx), PGA460_UART_TIMEOUT_MS) != HAL_OK) {
 		return HAL_ERROR;
 	}
 	// 2) Receive DIAG (1) + THR block (33) = 34 bytes total
 	uint8_t rx[34] = {0}; // rx[0]=DIAG, rx[1..32]=P1/P2 (32 bytes), rx[33]=THR_CRC
-	if (HAL_UART_Receive(&huart3, rx, sizeof(rx), UART_TIMEOUT) != HAL_OK) {
+	if (HAL_UART_Receive(&huart3, rx, sizeof(rx), PGA460_UART_TIMEOUT_MS) != HAL_OK) {
 		return HAL_ERROR;
 	}
 	// 3) Copy 33 bytes (P1_THR[16], P2_THR[16], THR_CRC) into mirror (skip DIAG)
@@ -628,7 +707,7 @@ HAL_StatusTypeDef PGA460_SetThresholds(uint8_t sensorID) {
 	// Frame: [SYNC][CMD=0x10][33 bytes][CHK] => total 36 bytes
 	frame[34] = PGA460_CalculateChecksum(&frame[1], 33); // checksum over CMD + 33 data bytes
 
-	if (HAL_UART_Transmit(&huart3, frame, sizeof(frame), UART_TIMEOUT) != HAL_OK) {
+	if (HAL_UART_Transmit(&huart3, frame, sizeof(frame), PGA460_UART_TIMEOUT_MS) != HAL_OK) {
 		return HAL_ERROR;
 	}
 	HAL_Delay(PGA460_CAPTURE_DELAY_MS);
@@ -680,7 +759,7 @@ HAL_StatusTypeDef PGA460_UltrasonicCmd(const uint8_t sensorID, const PGA460_Comm
             return HAL_ERROR;
     }
 
-    if (HAL_UART_Transmit(&huart3, frame, len, UART_TIMEOUT) != HAL_OK) {
+    if (HAL_UART_Transmit(&huart3, frame, len, PGA460_UART_TIMEOUT_MS) != HAL_OK) {
         DEBUG("Sensor %d: Ultrasonic TX failed (CMD=0x%02X)\n", sensorID, frame[1]);
         return HAL_ERROR;
     }
@@ -693,7 +772,6 @@ HAL_StatusTypeDef PGA460_UltrasonicCmd(const uint8_t sensorID, const PGA460_Comm
     return HAL_OK;
 }
 
-
 HAL_StatusTypeDef PGA460_GetUltrasonicMeasurement(const uint8_t sensorID) {
 	uint8_t localBuffer[PGA_OBJ_DATA_SIZE] = {0};
 	uint8_t tx[3];
@@ -701,13 +779,13 @@ HAL_StatusTypeDef PGA460_GetUltrasonicMeasurement(const uint8_t sensorID) {
 	tx[1] = (uint8_t)((sensorID << 5) | (PGA460_CMD_ULTRASONIC_MEASUREMENT_RESULT)); // Command code
 	tx[2] = PGA460_CalculateChecksum(&tx[1], 1);
     // 1) Request UMR
-    if (HAL_UART_Transmit(&huart3, tx, sizeof(tx), UART_TIMEOUT) != HAL_OK) {
+    if (HAL_UART_Transmit(&huart3, tx, sizeof(tx), PGA460_UART_TIMEOUT_MS) != HAL_OK) {
         DEBUG("Sensor %d: Measurement Result Request Failed!\n", sensorID);
         return HAL_ERROR;
     }
 
     // 2) Read response
-    if (HAL_UART_Receive(&huart3, localBuffer, sizeof(localBuffer), UART_TIMEOUT) != HAL_OK) {
+    if (HAL_UART_Receive(&huart3, localBuffer, sizeof(localBuffer), PGA460_UART_TIMEOUT_MS) != HAL_OK) {
         DEBUG("Sensor %d: Measurement Result Retrieval Failed!\n", sensorID);
         return HAL_ERROR;
     }
@@ -768,13 +846,13 @@ HAL_StatusTypeDef PGA460_GetEchoDataDump(uint8_t sensorID, uint8_t preset, uint8
 	tx[0] = PGA460_SYNC; // 0x55
 	tx[1] = (uint8_t)((sensorID << 5) | (PGA460_CMD_TRANSDUCER_ECHO_DATA_DUMP)); // Command code
 	tx[2] = PGA460_CalculateChecksum(&tx[1], 1);
-	if (HAL_UART_Transmit(&huart3, tx, sizeof(tx), UART_TIMEOUT) != HAL_OK) {
+	if (HAL_UART_Transmit(&huart3, tx, sizeof(tx), PGA460_UART_TIMEOUT_MS) != HAL_OK) {
 		DEBUG("Sensor %d: Echo Data Dump request TX failed!\n", sensorID);
 		ret = HAL_ERROR;
 		goto cleanup_disable_dump;
 	}
 	// 4) Receive Echo Data Dump (2-byte header + 128 samples)
-	if (HAL_UART_Receive(&huart3, response, sizeof(response), UART_TIMEOUT) != HAL_OK) {
+	if (HAL_UART_Receive(&huart3, response, sizeof(response), PGA460_UART_TIMEOUT_MS) != HAL_OK) {
 		DEBUG("Sensor %d: Echo Data Dump RX failed!\n", sensorID);
 		ret = HAL_ERROR;
 		goto cleanup_disable_dump;
@@ -831,26 +909,23 @@ HAL_StatusTypeDef PGA460_SetTemperatureOffset(uint8_t sensorID, float externalTe
 
 
 HAL_StatusTypeDef PGA460_GetSystemDiagnostics(const uint8_t sensorID, const uint8_t run, const uint8_t diag, float *diagResult) {
-	uint8_t response[4] = {0};
 	// Optional: start a capture using P1 before running diagnostics
 	if (run) {
 		if (PGA460_UltrasonicCmd(sensorID, PGA460_CMD_BURST_AND_LISTEN_PRESET1, 0) != HAL_OK) {
 			DEBUG("Sensor %d: Burst-and-Listen Command Failed!\n", sensorID);
 			return HAL_ERROR;
 		}
-		HAL_Delay(PGA460_EEPROM_WRITE_DELAY_MS); // allow measurement to complete
+		HAL_Delay(5); // allow measurement to complete
 	}
 	// Send System Diagnostics (0x08) ? 3B command [SYNC][CMD][CHK]
-	uint8_t tx[3];
-	tx[0] = PGA460_SYNC; // 0x55
-	tx[1] = (uint8_t)((sensorID << 5) | (PGA460_CMD_SYSTEM_DIAGNOSTICS)); // Command code
-	tx[2] = PGA460_CalculateChecksum(&tx[1], 1);
-	if (HAL_UART_Transmit(&huart3, tx, sizeof(tx), UART_TIMEOUT) != HAL_OK) {
+	uint8_t cmd[4] = {PGA460_SYNC, (uint8_t)((sensorID << 5) | PGA460_CMD_SYSTEM_DIAGNOSTICS), 0, 0};
+	cmd[2] = PGA460_CalculateChecksum(&cmd[1], 1);
+	if (HAL_UART_Transmit(&huart3, cmd, 3, PGA460_UART_TIMEOUT_MS) != HAL_OK) {
 		DEBUG("Sensor %d: System Diagnostics Request Failed!\n", sensorID);
 		return HAL_ERROR;
 	}
 	// Receive 4B response: [DIAG][FREQ_TICKS][DECAY_TICKS][PCHK]
-	if (HAL_UART_Receive(&huart3, response, sizeof(response), UART_TIMEOUT) != HAL_OK) {
+	if (HAL_UART_Receive(&huart3, cmd, sizeof(cmd), PGA460_UART_TIMEOUT_MS) != HAL_OK) {
 		DEBUG("Sensor %d: System Diagnostics Retrieval Failed!\n", sensorID);
 		return HAL_ERROR;
 	}
@@ -873,22 +948,22 @@ HAL_StatusTypeDef PGA460_GetSystemDiagnostics(const uint8_t sensorID, const uint
 	}
 	// Standard diagnostics
 	switch (diag) {
-	case 0: { // Frequency (Hz) from ticks of 0.5 µs
-		const uint8_t ticks = response[1];
-		if (ticks == 0) {
-			DEBUG("Sensor %d: Invalid Frequency Value (0 ticks)!\n", sensorID);
-			return HAL_ERROR;
+		case 0: { // Frequency (Hz) from ticks of 0.5 µs
+			const uint8_t ticks = cmd[1];
+			if (ticks == 0) {
+				DEBUG("Sensor %d: Invalid Frequency Value (0 ticks)!\n", sensorID);
+				return HAL_ERROR;
+			}
+			*diagResult = 1.0f / (ticks * 0.5e-6f); // Hz
+			break;
 		}
-		*diagResult = 1.0f / (ticks * 0.5e-6f); // Hz
-		break;
-	}
-	case 1: { // Decay period (µs), tick = 16 µs
-		*diagResult = (float)response[2] * 16.0f; // µs
-		break;
-	}
-	default:
-		DEBUG("Sensor %d: Invalid Diagnostic Type (%u)!\n", sensorID, (unsigned)diag);
-		return HAL_ERROR;
+		case 1: { // Decay period (µs), tick = 16 µs
+			*diagResult = (float)cmd[2] * 16.0f; // µs
+			break;
+		}
+		default:
+			DEBUG("Sensor %d: Invalid Diagnostic Type (%u)!\n", sensorID, (unsigned)diag);
+			return HAL_ERROR;
 	}
 	//DEBUG("Sensor %d: Diagnostic [%u] Result: %.2f\n", sensorID, (unsigned)diag, *diagResult);
 	return HAL_OK;
@@ -900,35 +975,31 @@ float PGA460_ReadTemperatureOrNoise(const uint8_t sensorID, const PGA460_CmdType
 	float result = PGA460_TEMP_ERR;  // default invalid
 	// Step 1: Request Temperature or Noise Measurement
 	// [SYNC][CMD=0x04][SEL(0=temp,1=noise)][CHK(CMD+SEL)]
-	uint8_t tx[4];
-	tx[0] = PGA460_SYNC; // SYNC
-	tx[1] = (uint8_t)((sensorID << 5) | (PGA460_CMD_TEMP_AND_NOISE_MEASUREMENT)); // CMD
-	tx[2] = isNoise ? 1 : 0; // selector
-	tx[3] = PGA460_CalculateChecksum(&tx[1], 2); // over CMD+SEL
-	if (HAL_UART_Transmit(&huart3, tx, sizeof(tx), UART_TIMEOUT) != HAL_OK) {
+	uint8_t cmd[4] = {PGA460_SYNC, (uint8_t)((sensorID << 5) | PGA460_CMD_TEMP_AND_NOISE_MEASUREMENT), isNoise ? 1 : 0, 0};
+	cmd[3] = PGA460_CalculateChecksum(&cmd[1], 2); // over CMD+SEL
+	if (HAL_UART_Transmit(&huart3, cmd, sizeof(cmd), PGA460_UART_TIMEOUT_MS) != HAL_OK) {
 		DEBUG("Sensor %d: Temp/Noise Measurement Command Failed!\n", sensorID);
 		return result;
 	}
 	HAL_Delay(PGA460_CAPTURE_DELAY_MS);  // small settle for measurement to complete
 	// Step 2: Send command to read the result (fixed 3-byte command)
-	tx[1] = (uint8_t)((sensorID << 5) | (PGA460_CMD_TEMP_AND_NOISE_RESULT)); // CMD
-	tx[2] = PGA460_CalculateChecksum(&tx[1], 1); // over CMD+SEL
-	if (HAL_UART_Transmit(&huart3, tx, PGA_CMD_SIZE, UART_TIMEOUT) != HAL_OK) {
+	cmd[1] = (uint8_t)((sensorID << 5) | (PGA460_CMD_TEMP_AND_NOISE_RESULT)); // CMD
+	cmd[2] = PGA460_CalculateChecksum(&cmd[1], 1); // over CMD+SEL
+	if (HAL_UART_Transmit(&huart3, cmd, PGA_CMD_SIZE, PGA460_UART_TIMEOUT_MS) != HAL_OK) {
 		DEBUG("Sensor %d: Result Request Command Failed!\n", sensorID);
 		return result;
 	}
 	// Step 3: Read 4-byte result frame: [DIAG][TEMP][NOISE][PCHK]
-	uint8_t rx[4] = {0};
-	if (HAL_UART_Receive(&huart3, rx, sizeof(rx), UART_TIMEOUT) != HAL_OK) {
+	if (HAL_UART_Receive(&huart3, cmd, sizeof(cmd), PGA460_UART_TIMEOUT_MS) != HAL_OK) {
 		DEBUG("Sensor %d: Failed to Receive Temp/Noise Data!\n", sensorID);
 		return result;
 	}
 	// Step 4: Parse result
 	if (!isNoise) {
-		result = ((float)rx[1] - 64.0f) / 1.5f;  // Temperature in °C
+		result = ((float)cmd[1] - 64.0f) / 1.5f;  // Temperature in °C
 		//DEBUG("Sensor %d: Temperature (C) = %.2f\n", sensorID, result);
 	} else {
-		result = (float)rx[2]; // Noise level (raw 8-bit)
+		result = (float)cmd[2]; // Noise level (raw 8-bit)
 		//DEBUG("Sensor %d: Noise Level = %.2f\n", sensorID, result);
 	}
 	return result;
@@ -975,3 +1046,74 @@ void getCycleToF(DecplTimes_t *reading) {
 		reading[Tx].E1 -= OffsetTime[Rx2];
 	}
 }
+
+//// ---- Helper Macros ----
+//#define DECPL_TIM      TIM2
+
+//#define DMA_CH(idx)    ((idx)==0 ? DMA1_Channel3 : (idx)==1 ? DMA1_Channel4 : DMA1_Channel5)
+
+//#define DIER_DMA(idx)  ((idx)==0 ? TIM_DIER_CC1DE : (idx)==1 ? TIM_DIER_CC2DE : TIM_DIER_CC3DE)
+//#define CCER_EN(idx)   ((idx)==0 ? TIM_CCER_CC1E  : (idx)==1 ? TIM_CCER_CC2E  : TIM_CCER_CC3E)
+
+//#define CCR_ADDR(idx)  ((idx)==0 ? (uint32_t)&TIM2->CCR1 :                         (idx)==1 ? (uint32_t)&TIM2->CCR2 :                                    (uint32_t)&TIM2->CCR3)
+
+//// ---- DMA Config ----
+//static inline void DMA_Config_Channel(uint8_t idx, uint32_t memAddr, uint16_t count) {
+//    DMA_Channel_TypeDef *ch = DMA_CH(idx);
+//    ch->CCR &= ~DMA_CCR_EN;
+//    ch->CMAR  = memAddr;
+//    ch->CNDTR = count;
+//    ch->CPAR  = CCR_ADDR(idx);
+//    ch->CCR |= DMA_CCR_EN;
+//}
+
+//// ---- TIM Enable/Disable ----
+//static inline void TIM_Enable3(uint8_t a, uint8_t b, uint8_t c) {
+//    DECPL_TIM->SR   = 0;
+//    DECPL_TIM->DIER |=  (DIER_DMA(a) | DIER_DMA(b) | DIER_DMA(c));
+//    DECPL_TIM->CCER |=  (CCER_EN(a)  | CCER_EN(b)  | CCER_EN(c));
+//}
+
+//static inline void TIM_Disable3(uint8_t a, uint8_t b, uint8_t c) {
+//    DECPL_TIM->CCER &= ~(CCER_EN(a)  | CCER_EN(b)  | CCER_EN(c));
+//    DECPL_TIM->DIER &= ~(DIER_DMA(a) | DIER_DMA(b) | DIER_DMA(c));
+//}
+
+//// ---- Final getCycleToF() ----
+//void getCycleToF1(DecplTimes_t *reading) {
+//    memset(ToF_Result, 0, sizeof(ToF_Result));
+
+//    if (!(TIM2->CR1 & TIM_CR1_CEN))
+//        TIM2->CR1 |= TIM_CR1_CEN;
+
+//    for (uint8_t Tx = 0; Tx < 3; Tx++) {
+//        uint8_t Rx1 = (Tx == 0) ? 1 : 0;
+//        uint8_t Rx2 = 3 - Tx - Rx1;
+
+//        DMA_Config_Channel(Tx,  (uint32_t)&ToF_Result[Tx].E0,  2);
+//        DMA_Config_Channel(Rx1, (uint32_t)&ToF_Result[Rx1].E0, 1);
+//        DMA_Config_Channel(Rx2, (uint32_t)&ToF_Result[Rx2].E0, 1);
+
+//        TIM_Enable3(Tx, Rx1, Rx2);
+
+//        PGA460_UltrasonicCmd(Rx1, PGA460_CMD_BROADCAST_BURST_AND_LISTEN_P2, 1);
+//        PGA460_UltrasonicCmd(Tx,  PGA460_CMD_BURST_AND_LISTEN_PRESET1,       1);
+
+//        uint32_t t0 = HAL_GetTick();
+//        while (ToF_Result[Tx].E1 == 0) {
+//            if (HAL_GetTick() - t0 > 5) break;
+//        }
+
+//        TIM_Disable3(Tx, Rx1, Rx2);
+
+//        DMA_CH(Tx)->CCR  &= ~DMA_CCR_EN;
+//        DMA_CH(Rx1)->CCR &= ~DMA_CCR_EN;
+//        DMA_CH(Rx2)->CCR &= ~DMA_CCR_EN;
+
+//        HAL_GPIO_WritePin(GPIOA, SGN_Pin, GPIO_PIN_RESET);
+
+//        reading[Tx].E0 = PGA460_GetUltrasonicMeasurement(Rx1) - (ToF_Result[Tx].E1 - ToF_Result[Rx1].E0) / 10;
+
+//        reading[Tx].E1 = PGA460_GetUltrasonicMeasurement(Rx2) - (ToF_Result[Tx].E1 - ToF_Result[Rx2].E0) / 10;
+//    }
+//}

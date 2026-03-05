@@ -366,7 +366,8 @@ typedef struct __attribute__((packed)) {
  * Initialization Functions
  * ------------------------------------------------- */
 HAL_StatusTypeDef PGA460_Init(uint8_t burnEEPROM);
-
+HAL_StatusTypeDef PGA460_WriteUARTAddr(uint8_t index);
+void PGA460_ScanAndReport(void);
 /* -------------------------------------------------
  * Register Read/Write Functions
  * ------------------------------------------------- */
