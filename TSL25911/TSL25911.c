@@ -1,3 +1,29 @@
+/***************************************************************************
+ * @file [TSL25911].h/.c
+ * This file contains definitions, data structures, and functions
+ * for interfacing with the TSL25911 very-high sensitivity light-to-digital converter.
+ *
+ * Copyright (c) [2024] Grozea Ion gvi70000
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ ***************************************************************************/
+
 #include "TSL25911.h"
 #include "i2c.h"
 
@@ -23,34 +49,6 @@ static inline HAL_StatusTypeDef TSL25911_ReadRegister(uint8_t reg, uint8_t* data
     return ReadRegister(TSL25911_I2C_ADDR, reg, data, len, &hi2c1);
 }
 
-/**
- * @brief Reads data from a specified register.
- * 
- * This function reads data from the TSL25911 sensor register over I2C.
- * It takes the register address and the number of bytes to read and returns
- * the result as `uint8_t` (1-byte read) or `uint16_t` (2-byte read).
- * 
- * @param reg The register address to read from.
- * @param numBytes The number of bytes to read (1 or 2).
- * @return uint16_t The read value (returns 0xFFFF on error).
- */
-static uint16_t TSL25911_getRegister(uint8_t reg, uint8_t numBytes) {
-    uint8_t data[2] = {0}; // Buffer to store read data (max 2 bytes)
-    HAL_StatusTypeDef status;
-
-    // Send register address and read data over I2C
-    status = HAL_I2C_Mem_Read(&hi2c1, TSL25911_I2C_ADDR, reg, I2C_MEMADD_SIZE_8BIT, data, numBytes, HAL_MAX_DELAY);
-    if (status != HAL_OK) {
-        return 0xFFFF; // Read failed, return error code
-    }
-
-    // Return value based on the number of bytes read
-    if (numBytes == 1) {
-        return data[0]; // Return 1-byte data as uint8_t
-    } else {
-        return (uint16_t)((data[1] << 8) | data[0]); // Return 2-byte data as uint16_t (MSB:LSB)
-    }
-}
 /**
  * @brief Initializes the TSL25911 sensor.
  * 
@@ -85,7 +83,6 @@ HAL_StatusTypeDef TSL25911_Init(void) {
     }
 
     // Step 6: Enable ALS and ALS interrupts
-//		uint16_t crtVal = TSL25911_getRegister(TSL25911_REG_ENABLE, 1);
 		TSL25911_Sensor.ENABLE.Val.Value = TSL25911_STATE_PON_AEN_AIEN;
 //		TSL25911_Sensor.ENABLE.Val.BitField.PON = 1; // Power ON
 //		TSL25911_Sensor.ENABLE.Val.BitField.AEN = 1; // ALS Enable
@@ -236,10 +233,10 @@ HAL_StatusTypeDef TSL25911_ReadLightData(TSL25911_LightData_t *lightData) {
     }
 
     switch (TSL25911_Sensor.CTRL.Val.BitField.AGAIN) {
-        case TSL25911_GAIN_LOW: again = 1.0F; break;
-        case TSL25911_GAIN_MED: again = 25.0F; break;
-        case TSL25911_GAIN_HIGH: again = 428.0F; break;
-        case TSL25911_GAIN_MAX: again = 9876.0F; break;
+        case TSL25911_GAIN_LOW:		again = 1.0F; break;
+				case TSL25911_GAIN_MED:		again = 24.5F; break;
+				case TSL25911_GAIN_HIGH:	again = 400.0F; break;
+				case TSL25911_GAIN_MAX:		again = 9200.0F; break;
         default: again = 1.0F; break;
     }
 
@@ -247,8 +244,12 @@ HAL_StatusTypeDef TSL25911_ReadLightData(TSL25911_LightData_t *lightData) {
         return HAL_ERROR; // Overflow detected
     }
 
-    cpl = (atime * again) / TSL25911_LUX_DF;
-    lightData->Lux = (((float)lightData->Visible) * (1.0F - ((float)lightData->Infrared / (float)lightData->FullSpectrum))) / cpl;
+    if (lightData->FullSpectrum == 0) {
+			lightData->Lux = 0.0F;
+		} else {
+				cpl = (atime * again) / TSL25911_LUX_DF;
+				lightData->Lux = (((float)lightData->Visible) * (1.0F - ((float)lightData->Infrared / (float)lightData->FullSpectrum))) / cpl;
+		}
 
     // Step 5: Clear the ALS interrupt if it is set
 		if (TSL25911_ClearInterrupt(TSL25911_SPECIAL_FUNCTION_CLEAR_ALS_INT) != HAL_OK) {

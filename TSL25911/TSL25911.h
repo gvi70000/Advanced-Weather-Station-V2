@@ -1,3 +1,29 @@
+/***************************************************************************
+ * @file [TSL25911].h/.c
+ * This file contains definitions, data structures, and functions
+ * for interfacing with the TSL25911 very-high sensitivity light-to-digital converter.
+ *
+ * Copyright (c) [2024] Grozea Ion gvi70000
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ ***************************************************************************/
+ 
 #ifndef TSL25911_H
 #define TSL25911_H
 
@@ -5,16 +31,16 @@
 #include <stdint.h>
 
 /** @brief TSL2591 I2C Address (default). */
-#define TSL25911_I2C_ADDR (0x29 << 1) // Adjust based on hardware configuration
+#define TSL25911_I2C_ADDR				(0x29 << 1) // Adjust based on hardware configuration
 
 /** @brief Device ID for TSL2591 sensor. */
-#define TSL25911_ID 0x50
+#define TSL25911_ID							0x50
 
 /** @brief Midpoint value for ALS thresholds. */
-#define TSL25911_SET_MID 0x7FFF
+#define TSL25911_SET_MID				0x7FFF
 
 /** @brief Command bit for transactions. */
-#define TSL25911_COMMAND_BIT 0xA0 // CMD (bit 7) + TRANSACTION (bits 6:5) set to 11 for special function
+#define TSL25911_COMMAND_BIT 0xA0 // CMD (bit 7) = 1, TRANSACTION (bits 6:5) = 01 (Normal Operation)
 
 /** @brief TSL2591 Register Addresses. */
 #define TSL25911_REG_ENABLE     (0x00 | TSL25911_COMMAND_BIT) ///< Enable register
@@ -24,15 +50,15 @@
 #define TSL25911_REG_AIHTL      (0x06 | TSL25911_COMMAND_BIT) ///< ALS interrupt high threshold (low byte)
 #define TSL25911_REG_AIHTH      (0x07 | TSL25911_COMMAND_BIT) ///< ALS interrupt high threshold (high byte)
 #define TSL25911_REG_NPAILTL    (0x08 | TSL25911_COMMAND_BIT) ///< No-persist ALS low threshold (low byte)
-#define TSL25911_REG_NPAILTH    0x09                         ///< No-persist ALS low threshold (high byte)
-#define TSL25911_REG_NPAIHTL    0x0A                         ///< No-persist ALS high threshold (low byte)
-#define TSL25911_REG_NPAIHTH    0x0B                         ///< No-persist ALS high threshold (high byte)
+#define TSL25911_REG_NPAILTH    (0x09 | TSL25911_COMMAND_BIT) ///< No-persist ALS low threshold (high byte)
+#define TSL25911_REG_NPAIHTL    (0x0A | TSL25911_COMMAND_BIT) ///< No-persist ALS high threshold (low byte)
+#define TSL25911_REG_NPAIHTH    (0x0B | TSL25911_COMMAND_BIT) ///< No-persist ALS high threshold (high byte)
 #define TSL25911_REG_PERSIST    (0x0C | TSL25911_COMMAND_BIT) ///< Interrupt persistence filter register
 #define TSL25911_REG_PID        (0x11 | TSL25911_COMMAND_BIT) ///< Package ID register
 #define TSL25911_REG_ID         (0x12 | TSL25911_COMMAND_BIT) ///< Device ID register
 #define TSL25911_REG_STATUS     (0x13 | TSL25911_COMMAND_BIT) ///< Status register
 #define TSL25911_REG_C0DATA     (0x14 | TSL25911_COMMAND_BIT) ///< Channel 0 data (low byte)
-#define TSL25911_REG_C1DATA     0x16                         ///< Channel 1 data (low byte)
+#define TSL25911_REG_C1DATA     (0x16 | TSL25911_COMMAND_BIT) ///< Channel 1 data (low byte)
 
 /**
  * @brief Special functions for TSL2591 commands.
@@ -41,7 +67,7 @@ typedef enum {
     TSL25911_SPECIAL_FUNCTION_INT_SET				= 0xE4, ///< Interrupt set - forces an interrupt
     TSL25911_SPECIAL_FUNCTION_CLEAR_ALS_INT	= 0xE6, ///< Clears ALS interrupt
     TSL25911_SPECIAL_FUNCTION_CLEAR_ALL_INT	= 0xE7, ///< Clears ALS and no persist ALS interrupt
-    TSL25911_SPECIAL_FUNCTION_CLEAR_NP_INT		= 0xEA  ///< Clears no persist ALS interrupt
+    TSL25911_SPECIAL_FUNCTION_CLEAR_NP_INT	= 0xEA  ///< Clears no persist ALS interrupt
 } TSL25911_SpecialFunction_t;
 
 /** @brief Lux calculation coefficient. */
@@ -98,10 +124,10 @@ typedef struct __attribute__((packed)) {
  * @brief Enumeration for gain settings.
  */
 typedef enum {
-    TSL25911_GAIN_LOW	= 0x00, ///< 1x Gain.
-    TSL25911_GAIN_MED	= 0x10, ///< 25x Gain.
-    TSL25911_GAIN_HIGH	= 0x20, ///< 428x Gain.
-    TSL25911_GAIN_MAX	= 0x30  ///< 9876x Gain.
+		TSL25911_GAIN_LOW  = 0x00, ///< 1x   — field value 00
+		TSL25911_GAIN_MED  = 0x01, ///< 25x  — field value 01
+		TSL25911_GAIN_HIGH = 0x02, ///< 400x — field value 10
+		TSL25911_GAIN_MAX  = 0x03  ///< 9200x— field value 11
 } TSL25911_GAIN_t;
 
 /**
