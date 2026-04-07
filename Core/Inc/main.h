@@ -53,7 +53,7 @@ extern "C" {
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
-
+#define TIMEOUT_COMM            100 // Timeout for sending ModBus frames
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
@@ -63,6 +63,8 @@ void Error_Handler(void);
 #define DECPL1_GPIO_Port GPIOA
 #define DECPL2_Pin GPIO_PIN_2
 #define DECPL2_GPIO_Port GPIOA
+#define INT_AS3935_Pin GPIO_PIN_3
+#define INT_AS3935_GPIO_Port GPIOA
 #define SGN_Pin GPIO_PIN_5
 #define SGN_GPIO_Port GPIOA
 #define UST_RX_Pin GPIO_PIN_10
@@ -71,9 +73,6 @@ void Error_Handler(void);
 #define UST_TX_GPIO_Port GPIOB
 #define RST_HDC_Pin GPIO_PIN_12
 #define RST_HDC_GPIO_Port GPIOB
-#define INT_AS3935_Pin GPIO_PIN_13
-#define INT_AS3935_GPIO_Port GPIOB
-#define INT_AS3935_EXTI_IRQn EXTI15_10_IRQn
 #define BMP_INT_Pin GPIO_PIN_14
 #define BMP_INT_GPIO_Port GPIOB
 #define BMP_INT_EXTI_IRQn EXTI15_10_IRQn
@@ -99,7 +98,8 @@ void Error_Handler(void);
 #define INT_AS7331_EXTI_IRQn EXTI9_5_IRQn
 
 /* USER CODE BEGIN Private defines */
-
+#define HDC_RST_On RST_HDC_GPIO_Port->BSRR = (uint32_t)RST_HDC_Pin;
+#define HDC_RST_Off RST_HDC_GPIO_Port->BRR = (uint32_t)RST_HDC_Pin;
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

@@ -51,7 +51,7 @@ void MX_I2C3_Init(void);
  * @brief Scan an I2C bus for devices (7-bit addresses 0..127).
  * @param None
  */
-void myI2C_Scan(I2C_HandleTypeDef* hi2c);
+void myI2C_Scan(void);
 /**
  * @brief Write bytes to an 8-bit register address on a 7-bit I2C slave.
  *        Uses DMA if USE_I2C_DMA is defined, else blocking.

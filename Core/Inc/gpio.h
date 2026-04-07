@@ -39,6 +39,9 @@ extern "C" {
 void MX_GPIO_Init(void);
 
 /* USER CODE BEGIN Prototypes */
+extern volatile uint8_t BMP_Ready;
+extern volatile uint8_t TCS34003_Ready;
+
 void Enable_EXTI_AS3935(void);
 void Disable_EXTI_AS3935(void);
 /* USER CODE END Prototypes */
