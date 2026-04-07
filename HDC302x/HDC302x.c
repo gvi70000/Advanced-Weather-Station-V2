@@ -1,10 +1,28 @@
-/**
- * @file HDC302x.c
- * @brief Implementation file for HDC302x temperature and humidity sensor library.
+/***************************************************************************
+ * @file [HDC302X].h/.c
+ * This file contains definitions, data structures, and functions
+ * for interfacing with the ENS160 air quality sensor.
  *
- * Contains functions for initializing, reading data, and configuring the HDC302x sensor.
- * Target: STM32F302, Keil MDK, STM32 HAL.
- */
+ * Copyright (c) [2024] Grozea Ion gvi70000
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ ***************************************************************************/
 
 #include "HDC302x.h"
 #include "i2c.h"
@@ -419,4 +437,203 @@ HDC302x_HeaterState_t HDC302x_UpdateHeater(HDC302x_t* sensorObj) {
 	}
 
 	return sensorObj->HeaterState;
+}
+
+/**
+ * @brief Encodes a temperature and relative-humidity offset into the HDC302x packed register format.
+ * @details The device stores both offsets as a single 16-bit word plus CRC (command 0xA004).
+ *          Bit layout (MSB to LSB):
+ *            Bit 15    : RH sign  (1 = add, 0 = subtract)
+ *            Bits 14-8 : RH_OS[6:0], LSB = 0.1953125 %RH,  max ±24.8046875 %RH
+ *            Bit  7    : T  sign  (1 = add, 0 = subtract)
+ *            Bits  6-0 : T_OS[6:0],  LSB = 0.1708984375 °C, max ±21.7041015625 °C
+ *          Values outside the representable range are clamped silently.
+ * @param temp_offset_c   Desired temperature correction in °C (negative to subtract).
+ * @param rh_offset_pct   Desired RH correction in %RH        (negative to subtract).
+ * @param out             Output structure to receive MSB, LSB, and CRC bytes.
+ * @return HAL_OK always (clamping handles out-of-range inputs).
+ */
+HAL_StatusTypeDef HDC302x_EncodeOffset(float temp_offset_c, float rh_offset_pct, HDC302x_Offset_t* out) {
+    // --- Temperature offset ---
+    uint8_t t_sign = (temp_offset_c >= 0.0f) ? 1u : 0u;
+    float   t_abs  = (temp_offset_c >= 0.0f) ? temp_offset_c : -temp_offset_c;
+    // LSB resolution = 175/65535 * 2^6 ≈ 0.1708984375 °C, 7 bits max
+    uint8_t t_bits = (uint8_t)(t_abs / 0.1708984375f + 0.5f);
+    if (t_bits > 0x7F) t_bits = 0x7F;  // Clamp to 7 bits (max ≈ 21.7 °C)
+
+    // --- Relative humidity offset ---
+    uint8_t rh_sign = (rh_offset_pct >= 0.0f) ? 1u : 0u;
+    float   rh_abs  = (rh_offset_pct >= 0.0f) ? rh_offset_pct : -rh_offset_pct;
+    // LSB resolution = 100/65535 * 2^9 ≈ 0.1953125 %RH, 7 bits max
+    uint8_t rh_bits = (uint8_t)(rh_abs / 0.1953125f + 0.5f);
+    if (rh_bits > 0x7F) rh_bits = 0x7F;  // Clamp to 7 bits (max ≈ 24.8 %RH)
+
+    // Pack: MSB = [RH+/-, RH6..RH0], LSB = [T+/-, T6..T0]
+    out->MSB = (uint8_t)((rh_sign << 7) | (rh_bits & 0x7F));
+    out->LSB = (uint8_t)((t_sign  << 7) | (t_bits  & 0x7F));
+
+    uint8_t tmp[2] = { out->MSB, out->LSB };
+    out->C_RC = CalculateCRC(tmp);
+
+    return HAL_OK;
+}
+
+/**
+ * @brief Programs a temperature and RH measurement offset into the sensor's non-volatile memory.
+ * @details The device must be in sleep mode while the offset is written (the function temporarily
+ *          stops auto-measurement, writes the offset, waits 50 ms for EEPROM programming, then
+ *          restarts auto-measurement at 4 Hz / lowest noise).  If a different measurement rate is
+ *          needed after the call, follow up with HDC302x_StartAutoMeasurement().
+ *
+ *          Example — correct a +3 °C self-heating error:
+ *            HDC302x_SetOffset(&sensor, -3.0f, 0.0f);
+ *
+ * @param sensorObj       Pointer to sensor handle.
+ * @param temp_offset_c   Temperature correction in °C (negative subtracts).
+ * @param rh_offset_pct   RH correction in %RH          (negative subtracts, 0.0 for none).
+ * @return HAL status.
+ */
+HAL_StatusTypeDef HDC302x_SetOffset(HDC302x_t* sensorObj, float temp_offset_c, float rh_offset_pct) {
+    HAL_StatusTypeDef status;
+
+    // Step 1: Return to sleep (Trigger-On-Demand base state) so EEPROM can be written
+    sensorObj->Config.CFG_CRC = 0x00;
+    sensorObj->Cmd = HDC302X_CMD_RETURN_TO_TRIGGER;
+    status = SendDeviceCommand(sensorObj);
+    if (status != HAL_OK) return status;
+    HAL_Delay(1);  // Settle before EEPROM access
+
+    // Step 2: Encode the offset
+    HDC302x_Offset_t offset;
+    HDC302x_EncodeOffset(temp_offset_c, rh_offset_pct, &offset);
+
+    // Step 3: Send offset command (0xA0 0x04) followed by [MSB, LSB, CRC]
+    uint8_t buffer[5];
+    buffer[0] = 0xA0;       // Command MSB
+    buffer[1] = 0x04;       // Command LSB
+    buffer[2] = offset.MSB;
+    buffer[3] = offset.LSB;
+    buffer[4] = offset.C_RC;
+    status = HAL_I2C_Master_Transmit(&hi2c3, sensorObj->Address, buffer, 5, I2C_TIMEOUT);
+    if (status != HAL_OK) return status;
+
+    // Step 4: Wait for EEPROM programming to complete (datasheet: t_PROG, I2C blocked during this)
+    HAL_Delay(50);
+
+    // Step 5: Resume 4 Hz / lowest-noise auto measurement
+    return HDC302x_StartAutoMeasurement(sensorObj, HDC302X_CMD_AUTO_MEASUREMENT_4_PER_SECOND_LPM0);
+}
+
+/**
+ * @brief Encodes a (RH, temperature) pair into the HDC302x packed ALERT threshold format.
+ * @details Threshold format (datasheet sec 7.5.7.4.2):
+ *            Bits 15-9 : 7 MSBs of the 16-bit RH raw value  (≈1 %RH  resolution)
+ *            Bits  8-0 : 9 MSBs of the 16-bit T  raw value  (≈0.5 °C resolution)
+ *          Temperature range: −45 °C to +125 °C.  RH range: 0 % to 100 %.
+ * @param rh_pct  Relative humidity threshold in %RH.
+ * @param temp_c  Temperature threshold in °C.
+ * @param out     Output structure to receive MSB, LSB, and CRC bytes.
+ * @return HAL_OK always (values are clamped to valid sensor range).
+ */
+HAL_StatusTypeDef HDC302x_EncodeAlertThreshold(float rh_pct, float temp_c, HDC302x_AlertThreshold_t* out) {
+    // Clamp to sensor range
+    if (rh_pct  <   0.0f) rh_pct  =   0.0f;
+    if (rh_pct  > 100.0f) rh_pct  = 100.0f;
+    if (temp_c  < -45.0f) temp_c  = -45.0f;
+    if (temp_c  > 125.0f) temp_c  = 125.0f;
+
+    // Convert to 16-bit raw values (inverse of datasheet formulas)
+    uint16_t raw_rh = (uint16_t)(rh_pct  / 100.0f  * 65535.0f + 0.5f);
+    uint16_t raw_t  = (uint16_t)((temp_c + 45.0f) / 175.0f * 65535.0f + 0.5f);
+
+    // Keep only 7 MSBs of RH and 9 MSBs of T
+    uint16_t rh7 = (raw_rh >> 9) & 0x7Fu;   // bits [15:9] → bits [6:0]
+    uint16_t t9  = (raw_t  >> 7) & 0x1FFu;  // bits [15:7] → bits [8:0]
+
+    // Pack into 16-bit threshold word: [RH6..RH0, T8..T0]
+    uint16_t word = (uint16_t)((rh7 << 9) | t9);
+
+    out->MSB = (uint8_t)(word >> 8);
+    out->LSB = (uint8_t)(word & 0xFF);
+    uint8_t tmp[2] = { out->MSB, out->LSB };
+    out->CR_C = CalculateCRC(tmp);
+
+    return HAL_OK;
+}
+
+/**
+ * @brief Configures all four ALERT thresholds on the sensor.
+ * @details Programs Set High, Clear High, Set Low, and Clear Low thresholds in sequence.
+ *          Pre-built thresholds from HDC302x_EncodeAlertThreshold() or the convenience
+ *          HDC302X_ALERT_DATA_READY_* macros can be passed directly.
+ *
+ *          Meteo station "data-ready interrupt" usage:
+ *            HDC302x_AlertConfig_t alertCfg = {
+ *                .SetHigh   = HDC302X_ALERT_DATA_READY_SET_HIGH,
+ *                .ClearHigh = HDC302X_ALERT_DATA_READY_CLR_HIGH,
+ *                .SetLow    = HDC302X_ALERT_DATA_READY_SET_LOW,
+ *                .ClearLow  = HDC302X_ALERT_DATA_READY_CLR_LOW,
+ *            };
+ *            HDC302x_ConfigureAlert(&sensor, &alertCfg);
+ *          The ALERT GPIO EXTI ISR should then call HDC302x_AlertCallback().
+ *
+ * @param sensorObj Pointer to sensor handle.
+ * @param cfg       Pointer to structure holding all four pre-encoded thresholds.
+ * @return HAL status.
+ */
+HAL_StatusTypeDef HDC302x_ConfigureAlert(HDC302x_t* sensorObj, const HDC302x_AlertConfig_t* cfg) {
+    typedef struct {
+        HDC302x_Command_t          cmd;
+        const HDC302x_AlertThreshold_t* thr;
+    } AlertWrite_t;
+
+    AlertWrite_t writes[4] = {
+        { HDC302X_CMD_CONFIGURE_ALERT_THRESHOLD_SET_HIGH,   &cfg->SetHigh   },
+        { HDC302X_CMD_CONFIGURE_ALERT_THRESHOLD_CLEAR_HIGH, &cfg->ClearHigh },
+        { HDC302X_CMD_CONFIGURE_ALERT_THRESHOLD_SET_LOW,    &cfg->SetLow    },
+        { HDC302X_CMD_CONFIGURE_ALERT_THRESHOLD_CLEAR_LOW,  &cfg->ClearLow  },
+    };
+
+    for (uint8_t i = 0; i < 4; i++) {
+        uint8_t buffer[5];
+        buffer[0] = (uint8_t)(writes[i].cmd.Command >> 8);
+        buffer[1] = (uint8_t)(writes[i].cmd.Command & 0xFF);
+        buffer[2] = writes[i].thr->MSB;
+        buffer[3] = writes[i].thr->LSB;
+        buffer[4] = writes[i].thr->CR_C;
+
+        HAL_StatusTypeDef status = HAL_I2C_Master_Transmit(&hi2c3, sensorObj->Address, buffer, 5, I2C_TIMEOUT);
+        if (status != HAL_OK) return status;
+    }
+
+    return HAL_OK;
+}
+
+/**
+ * @brief Weak callback invoked from the ALERT GPIO EXTI interrupt handler.
+ * @details Override this function in application code to react to ALERT events
+ *          (data-ready or out-of-range measurements).  The default implementation
+ *          is empty so linking succeeds without an override.
+ *
+ *          Typical override in main.c or sensor task:
+ *            void HDC302x_AlertCallback(HDC302x_t* sensorObj) {
+ *                HDC302x_ReadData(sensorObj);
+ *                // process sensorObj->Data ...
+ *                HDC302x_ClearStatus(sensorObj); // deassert ALERT
+ *            }
+ *
+ *          Wire to EXTI in stm32g4xx_it.c (ALERT pin example: PA5):
+ *            void EXTI9_5_IRQHandler(void) {
+ *                HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_5);
+ *            }
+ *            void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+ *                if (GPIO_Pin == GPIO_PIN_5) {
+ *                    HDC302x_AlertCallback(&hdc_sensor1);
+ *                }
+ *            }
+ *
+ * @param sensorObj Pointer to the sensor handle associated with the ALERT pin.
+ */
+__attribute__((weak)) void HDC302x_AlertCallback(HDC302x_t* sensorObj) {
+    (void)sensorObj;  // Default: do nothing. Override in application.
 }

@@ -1,11 +1,29 @@
-/**
- * @file HDC302x.h
- * @brief Header file for the HDC302x temperature and humidity sensor library.
+/***************************************************************************
+ * @file [HDC302X].h/.c
+ * This file contains definitions, data structures, and functions
+ * for interfacing with the ENS160 air quality sensor.
  *
- * This library contains all the definitions, macros, and function prototypes
- * for initializing, configuring, and reading data from the HDC302x sensor.
- */
-
+ * Copyright (c) [2024] Grozea Ion gvi70000
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ ***************************************************************************/
+ 
 #ifndef __HDC302X_H
 #define __HDC302X_H
 
@@ -29,10 +47,12 @@ extern "C" {
 #define HDC302X_TEMP_THRESHOLD	((20.0f + 40.0f) / 165.0f) * 65536.0f	// Default temperature threshold (20 deg C)
 #define HDC302X_HUM_THRESHOLD		(50.0f / 100.0f) * 65536.0f	// Default humidity threshold (50%)
 
-// Conversion constants
-#define HDC302X_RH_COEFF				0.00152587890625f	// Humidity conversion coefficient    (100 / 65535)
-#define HDC302X_TEMP_COEFF1			0.0025177001953125f	// Temperature conversion coefficient (165 / 65535)
-#define HDC302X_TEMP_COEFF2			40.0f	// Temperature offset (subtract 40 deg C)
+// Conversion constants  (datasheet sec 7.3.3)
+// RH%   = 100  * raw / 65535
+// T(°C) = -45  + 175 * raw / 65535   <-- NOTE: datasheet uses -45/175, NOT -40/165
+#define HDC302X_RH_COEFF				0.00152587890625f	// Humidity conversion coefficient    (100  / 65535)
+#define HDC302X_TEMP_COEFF1			0.00267009377f		// Temperature conversion coefficient (175  / 65535)
+#define HDC302X_TEMP_COEFF2			45.0f				// Temperature offset (subtract 45 deg C)
 
 // Dew point calculation constants (Magnus-Tetens approximation)
 #define DEW_POINT_CONST_A				17.27f	// Magnus-Tetens constant A
@@ -296,6 +316,81 @@ typedef struct {
     float										AmbientTemp;		// Ambient T captured before heater starts (for cooling check)
 } HDC302x_t;
 
+// -------------------------------------------------------------------------
+// Temperature / RH offset programming  (datasheet sec 7.5.7.5)
+// -------------------------------------------------------------------------
+// The offset register is a packed 16-bit word:
+//   Bit 15  : RH sign (1 = add, 0 = subtract)
+//   Bits 14-8 : RH_OS[6:0]  —  Table 7-10, LSB = 0.1953125 %RH,  max ±24.8 %RH
+//   Bit  7  : T  sign (1 = add, 0 = subtract)
+//   Bits 6-0  : T_OS[6:0]   —  Table 7-12, LSB = 0.1708984375 °C, max ±21.7 °C
+//
+// HDC302x_EncodeOffset() calculates the register word and its CRC from
+// physical float values.  Pass rh_offset = 0.0f to leave RH untouched.
+// Example: -3 °C correction → HDC302x_EncodeOffset(-3.0f, 0.0f, &cfg)
+//
+// Note: device MUST be in sleep mode while writing the offset (return to
+// auto-measurement after with HDC302x_StartAutoMeasurement).
+
+/**
+ * @brief Packed offset configuration sent to the HDC302x offset register (0xA004).
+ */
+typedef struct __attribute__((packed)) {
+    uint8_t MSB;   // Combined [RH+/-, RH_OS6..RH_OS0] byte
+    uint8_t LSB;   // Combined [T+/-, T_OS6..T_OS0] byte
+    uint8_t C_RC;   // CRC-8 over {MSB, LSB}
+} HDC302x_Offset_t;
+
+// -------------------------------------------------------------------------
+// ALERT threshold programming  (datasheet sec 7.5.7.4)
+// -------------------------------------------------------------------------
+// Each threshold is a packed 16-bit word:
+//   Bits 15-9 : 7 MSBs of the 16-bit RH word  (≈1 % resolution)
+//   Bits  8-0 : 9 MSBs of the 16-bit T  word  (≈0.5 °C resolution)
+//
+// Four thresholds must be programmed for meaningful ALERT behaviour:
+//   Set High   — asserts  ALERT when T or RH rises  above this
+//   Clear High — deasserts ALERT when T or RH falls below this (hysteresis below Set High)
+//   Set Low    — asserts  ALERT when T or RH falls below this
+//   Clear Low  — deasserts ALERT when T or RH rises above this (hysteresis above Set Low)
+//
+// Meteo station "data-ready" trick: set all four thresholds to values that
+// are always satisfied (e.g. Set High = 100 %RH / 100 °C, Set Low = 0 %RH
+// / –45 °C) so the ALERT pin fires after every measurement.
+//
+// HDC302x_EncodeAlertThreshold() converts (rh_pct, temp_c) to the 16-bit
+// packed value + CRC.
+
+/**
+ * @brief Packed alert threshold value with CRC.
+ */
+typedef struct __attribute__((packed)) {
+    uint8_t MSB;   // Bits [15:8] of the packed RH+T threshold word
+    uint8_t LSB;   // Bits  [7:0] of the packed RH+T threshold word
+    uint8_t CR_C;   // CRC-8 over {MSB, LSB}
+} HDC302x_AlertThreshold_t;
+
+/**
+ * @brief Convenience bundle for all four ALERT thresholds.
+ */
+typedef struct {
+    HDC302x_AlertThreshold_t SetHigh;    // Assert  ALERT when above this
+    HDC302x_AlertThreshold_t ClearHigh;  // Deassert ALERT (high) when below this
+    HDC302x_AlertThreshold_t SetLow;     // Assert  ALERT when below this
+    HDC302x_AlertThreshold_t ClearLow;   // Deassert ALERT (low)  when above this
+} HDC302x_AlertConfig_t;
+
+// Convenience macro: "data-ready" configuration — ALERT fires after every
+// measurement because every reading satisfies both the High and Low thresholds.
+// Set High  = 100 %RH / 100 °C  →  packed 0xFE00, CRC 0x6B  (always triggered above)
+// Set Low   =   0 %RH / -45 °C  →  packed 0x0000, CRC 0x81  (always triggered below)
+// Clear High = 99 %RH / 98 °C   →  packed 0xFCC0, CRC 0xBC  (just below Set High)
+// Clear Low  =  1 %RH / -44 °C  →  packed 0x0240, CRC 0x8D  (just above Set Low)
+#define HDC302X_ALERT_DATA_READY_SET_HIGH   ((HDC302x_AlertThreshold_t){ .MSB = 0xFE, .LSB = 0x00, .CRC = 0x6B })
+#define HDC302X_ALERT_DATA_READY_CLR_HIGH   ((HDC302x_AlertThreshold_t){ .MSB = 0xFC, .LSB = 0xC0, .CRC = 0xBC })
+#define HDC302X_ALERT_DATA_READY_SET_LOW    ((HDC302x_AlertThreshold_t){ .MSB = 0x00, .LSB = 0x00, .CRC = 0x81 })
+#define HDC302X_ALERT_DATA_READY_CLR_LOW    ((HDC302x_AlertThreshold_t){ .MSB = 0x02, .LSB = 0x40, .CRC = 0x8D })
+
 // Function prototypes
 void HDC302x_Reset();
 /**
@@ -338,6 +433,17 @@ float HDC302x_GetDewPoint(HDC302x_t* sensorObj);
 HAL_StatusTypeDef HDC302x_HeaterEnable(HDC302x_t* sensorObj, HDC302x_HeaterConfig_t power);
 HAL_StatusTypeDef HDC302x_HeaterDisable(HDC302x_t* sensorObj);
 HDC302x_HeaterState_t HDC302x_UpdateHeater(HDC302x_t* sensorObj);
+
+// ---- Offset programming ----
+HAL_StatusTypeDef HDC302x_EncodeOffset(float temp_offset_c, float rh_offset_pct, HDC302x_Offset_t* out);
+HAL_StatusTypeDef HDC302x_SetOffset(HDC302x_t* sensorObj, float temp_offset_c, float rh_offset_pct);
+
+// ---- ALERT threshold helpers ----
+HAL_StatusTypeDef HDC302x_EncodeAlertThreshold(float rh_pct, float temp_c, HDC302x_AlertThreshold_t* out);
+HAL_StatusTypeDef HDC302x_ConfigureAlert(HDC302x_t* sensorObj, const HDC302x_AlertConfig_t* cfg);
+
+// ---- Weak ISR callback — override in application code ----
+void HDC302x_AlertCallback(HDC302x_t* sensorObj);
 
 #ifdef __cplusplus
 }
