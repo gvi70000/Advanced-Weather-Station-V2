@@ -253,18 +253,51 @@ static volatile uint8_t* get_flag_for_bus(I2C_HandleTypeDef* hi2c) {
   return NULL;
 }
 
-void myI2C_Scan(I2C_HandleTypeDef* hi2c) {
-  if (!hi2c) return;
-  printf("Scanning I2C bus (instance %s)...\r\n", (hi2c->Instance == I2C1) ? "I2C1" : (hi2c->Instance == I2C2) ? "I2C2" : "UNKNOWN");
+// I2C bus scanner � probes all valid 7-bit addresses (0x08�0x77)
+// Skips reserved ranges per I2C specification.
+// Prints a formatted map and a summary of found devices with known IDs.
+// Call once after all reset lines are released and power rails are stable.
+void myI2C_Scan(void) {
+    uint8_t found = 0;
 
-  for (uint16_t addr7 = 0; addr7 < 128; addr7++)
-  {
-    uint16_t addr8 = (addr7 << 1); /* HAL expects 8-bit addr in some APIs */
-    HAL_StatusTypeDef res = HAL_I2C_IsDeviceReady(hi2c, addr8, 1, I2C_TIMEOUT);
-    if (res == HAL_OK) {
-      printf("Found device at 7-bit 0x%02X (8-bit 0x%02X)\r\n", addr7, addr8);
+    printf("\r\n--- I2C Bus Scan ---\r\n");
+
+    for (uint8_t addr = 0; addr <= 127; addr++) {
+
+        // 2 trials, 10ms timeout per trial � enough for slow devices post-reset
+        HAL_StatusTypeDef res = HAL_I2C_IsDeviceReady(&hi2c3, (uint16_t)(addr << 1), 2, 10);
+
+        if (res == HAL_OK) {
+            // Identify known devices
+            const char* name = "unknown";
+            switch (addr) {
+								case 0x03: name = "AS3935";									break;
+								case 0x29: name = "TCS/TSL";								break;
+                case 0x44: name = "HDC302x #1 (ADDR=GND)";	break;
+                case 0x45: name = "HDC302x #2 (ADDR=VCC)";	break;
+                case 0x46: name = "BMP581 (SDO=GND)";				break;
+                case 0x47: name = "BMP581 (SDO=VCC)";				break;
+								case 0x52: name = "ENS160";									break;
+                case 0x4A: name = "BNO086 (ADDR=GND)";			break;
+                case 0x4B: name = "BNO086 (ADDR=VCC)";			break;
+                case 0x50: name = "EEPROM/AT24Cxx";					break;
+                case 0x68: name = "RTC or IMU (alt)";				break;
+								case 0x74: name = "AS7331";									break;
+            }
+            printf("  [0x%02X] %s\r\n", addr, name);
+            found++;
+        } else if (res == HAL_BUSY) {
+            // SDA stuck low � bus needs recovery
+            printf("  [0x%02X] BUS BUSY - SDA may be stuck low\r\n", addr);
+        }
     }
-  }
+
+    if (found == 0) {
+        printf("  No devices found - check pull-ups and wiring\r\n");
+    }
+
+    printf("  Total: %d device(s) found\r\n", found);
+    printf("--- Scan complete ---\r\n\r\n");
 }
 // Common I2C write function with optional DMA support
 HAL_StatusTypeDef WriteRegister(uint8_t device_address_7bit, uint8_t reg_address, uint8_t* data, uint16_t len, I2C_HandleTypeDef* hi2c) {

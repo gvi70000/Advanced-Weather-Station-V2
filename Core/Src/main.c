@@ -27,7 +27,19 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <stdio.h>
+#include <string.h>
+// I2C3 sensors
+#include "BMP581.h"
+#include "HDC302x.h"
+#include "TCS34003.h"
+#include "ENS160.h"
+// I2C1 sensors
+#include "TSL25911.h"
+#include "AS7331.h"
+#include "AS3935.h"
 
+#include "PGA460.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -48,6 +60,22 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+// BMP581 data-ready flag set by HAL_GPIO_EXTI_Callback on BMP_INT_Pin
+extern volatile uint8_t BMP_Ready;
+extern volatile uint8_t TCS34003_Ready;
+extern volatile uint8_t TSL25911_Ready;
+// BMP581 pressure and temperature result
+BMP581_sensor_data_t BMP581_Data;
+TCS34003_LightData_t TCS34003_Data;
+// HDC302x sensor handles Address set before HDC302x_Init()
+HDC302x_t Sensor1;
+HDC302x_t Sensor2;
+
+// Latest HDC302x readings used to compute avgTemp and avgRH in sendData()
+float temp1 = 0.0f;
+float temp2 = 0.0f;
+float rh1   = 0.0f;
+float rh2   = 0.0f;
 
 /* USER CODE END PV */
 
@@ -100,12 +128,100 @@ int main(void)
   MX_CORDIC_Init();
   /* USER CODE BEGIN 2 */
 
+	//myI2C_Scan();
+	//PGA460_Init(0);
+	//PGA460_WriteUARTAddr(1);
+	//PGA460_ScanAndReport();
+	
+	// Initialize HDC302x Sensors
+	Sensor1.Address = HDC302X_SENSOR_1_ADDR;
+	if (HDC302x_Init(&Sensor1) != HAL_OK) {
+			printf("Sensor 1 initialization failed!\n");
+	} else {
+			printf("Sensor 1 initialized successfully.\n");
+	}
+
+	Sensor2.Address = HDC302X_SENSOR_2_ADDR;
+	if (HDC302x_Init(&Sensor2) != HAL_OK) {
+			printf("Sensor 2 initialization failed!\n");
+	} else {
+			printf("Sensor 2 initialized successfully.\n");
+	}
+
+	// Start HDC302x auto-measurement at 4 Hz LPM0 sensor measures continuously;
+	// HDC302x_ReadData() fetches the latest result from the output register
+	HDC302x_StartAutoMeasurement(&Sensor1, HDC302X_CMD_AUTO_MEASUREMENT_4_PER_SECOND_LPM0);
+	HDC302x_StartAutoMeasurement(&Sensor2, HDC302X_CMD_AUTO_MEASUREMENT_4_PER_SECOND_LPM0);
+	// Initialize BMP581
+	if (BMP581_Init() == HAL_OK) {
+			printf("BMP_INIT_OK!\n");
+	} else {
+			printf("BMP_INIT_FAIL!\n");
+	}
+	
+	if (TCS34003_Init() != HAL_OK) {
+			printf("TCS34003 initialization failed!\n");
+	}
+	
+	if (ENS160_Init() != HAL_OK) {
+			printf("ENS160 initialization failed!\n");
+	}
+	
+	//=========================================================
+	if (AS3935_Init() != HAL_OK) {
+			printf("AS3935 initialization failed!\n");
+//	} else {
+//		HAL_TIM_Base_Start(&htim2);
+//		printf("_______________________\n");
+//		AS3935_TuneAntenna();
+	}
+	
+	// Initialize AS7331
+	if (AS7331_Init() != HAL_OK) {
+			printf("AS7331 initialization failed!\n");
+	}
+
+
+	// Initialize TSL25911
+	if (TSL25911_Init() != HAL_OK) {
+			printf("TSL25911 initialization failed!\n");
+	}
+
+	
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+      // BMP581 update pressure and temperature (4 Hz, interrupt-driven)
+      if (BMP_Ready) {
+				BMP_Ready = 0;
+				BMP581_Get_TempPressData(&BMP581_Data);
+				// HDC302x read humidity and temperature at 4 Hz (HDC_READ_TIME = 250 ms)
+				// Auto-measurement runs continuously inside the sensor; ReadData() fetches
+				// the latest result from the output register
+				if (HDC302x_ReadData(&Sensor1) == HAL_OK) {
+					temp1 = Sensor1.Data.Temperature;
+					rh1   = Sensor1.Data.Humidity;
+				}
+				if (HDC302x_ReadData(&Sensor2) == HAL_OK) {
+					temp2 = Sensor2.Data.Temperature;
+					rh2   = Sensor2.Data.Humidity;
+				}
+      }
+			if (TCS34003_Ready) {
+				TCS34003_Ready = 0;
+        if (TCS34003_GetLightData(&TCS34003_Data) != HAL_OK) {
+					printf("TCS34003 read failed!\n");
+        }
+			}
+			if (TSL25911_Ready) {
+				TCS34003_Ready = 0;
+        if (TCS34003_GetLightData(&TCS34003_Data) != HAL_OK) {
+					printf("TCS34003 read failed!\n");
+        }
+			}
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */

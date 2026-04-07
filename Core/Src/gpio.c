@@ -29,7 +29,10 @@
 /* Configure GPIO                                                             */
 /*----------------------------------------------------------------------------*/
 /* USER CODE BEGIN 1 */
-
+// BMP581 data-ready flag � set by HAL_GPIO_EXTI_Callback on BMP_INT_Pin
+volatile uint8_t BMP_Ready = 0;
+volatile uint8_t TCS34003_Ready = 0;
+volatile uint8_t TSL25911_Ready = 0;
 /* USER CODE END 1 */
 
 /** Configure pins as
@@ -68,12 +71,6 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(RST_HDC_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : INT_AS3935_Pin */
-  GPIO_InitStruct.Pin = INT_AS3935_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
-  HAL_GPIO_Init(INT_AS3935_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : BMP_INT_Pin INT_AS7331_Pin */
   GPIO_InitStruct.Pin = BMP_INT_Pin|INT_AS7331_Pin;
@@ -126,5 +123,20 @@ void Enable_EXTI_AS3935(void) {
 void Disable_EXTI_AS3935(void) {
 	HAL_GPIO_DeInit(GPIOB, GPIO_PIN_0);	
   HAL_NVIC_DisableIRQ(EXTI0_IRQn);
+}
+
+// EXTI callback � sets sensor ready flags
+// NOTE: HAL_GPIO_EXTI_IRQHandler already clears the pending bit. Do NOT call
+// __HAL_GPIO_EXTI_CLEAR_IT here; it can re-trigger the interrupt on some STM32F3 silicon.
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    if (GPIO_Pin == BMP_INT_Pin) {
+        BMP_Ready = 1;
+    }
+    if (GPIO_Pin == BMP_INT_Pin) {
+        TCS34003_Ready = 1;
+    }
+		if (GPIO_Pin == INT_TSL25911_Pin) {
+        TSL25911_Ready = 1;
+    }
 }
 /* USER CODE END 2 */

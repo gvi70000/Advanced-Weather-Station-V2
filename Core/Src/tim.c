@@ -86,7 +86,6 @@ void MX_TIM2_Init(void)
   {
     Error_Handler();
   }
-  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
   if (HAL_TIM_IC_ConfigChannel(&htim2, &sConfigIC, TIM_CHANNEL_4) != HAL_OK)
   {
     Error_Handler();
@@ -116,7 +115,7 @@ void HAL_TIM_Base_MspInit(TIM_HandleTypeDef* tim_baseHandle)
     PA2     ------> TIM2_CH3
     PA3     ------> TIM2_CH4
     */
-    GPIO_InitStruct.Pin = DECPL0_Pin|DECPL1_Pin|DECPL2_Pin|GPIO_PIN_3;
+    GPIO_InitStruct.Pin = DECPL0_Pin|DECPL1_Pin|DECPL2_Pin|INT_AS3935_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -201,7 +200,7 @@ void HAL_TIM_Base_MspDeInit(TIM_HandleTypeDef* tim_baseHandle)
     PA2     ------> TIM2_CH3
     PA3     ------> TIM2_CH4
     */
-    HAL_GPIO_DeInit(GPIOA, DECPL0_Pin|DECPL1_Pin|DECPL2_Pin|GPIO_PIN_3);
+    HAL_GPIO_DeInit(GPIOA, DECPL0_Pin|DECPL1_Pin|DECPL2_Pin|INT_AS3935_Pin);
 
     /* TIM2 DMA DeInit */
     HAL_DMA_DeInit(tim_baseHandle->hdma[TIM_DMA_ID_CC1]);
@@ -217,11 +216,50 @@ void HAL_TIM_Base_MspDeInit(TIM_HandleTypeDef* tim_baseHandle)
 }
 
 /* USER CODE BEGIN 1 */
-/* DMA Transfer Complete Callback */
+/*
+ * DMA Transfer Complete Callback for TIM2 input-capture channels.
+ *
+ * Each wind measurement arms CH1, CH2, CH3 for 2 captures each.  The DMA TC
+ * interrupt fires individually when each channel finishes its 2-capture burst.
+ * We must wait until ALL THREE channels have completed before signalling the
+ * measurement code — reading ToF_Result[][].E1 from a channel that hasn't
+ * fired its TC yet yields stale or zero data.
+ *
+ * Implementation:
+ *   A static bitmask `chan_done` accumulates completed channels using the
+ *   HAL_TIM_ActiveChannel bit values (CH1=0x01, CH2=0x02, CH3=0x04).
+ *   Decpl_RDY is set only when all three bits are present.
+ *
+ *   CH4 (PA3 = INT_AS3935 lightning sensor) shares TIM2 but must NOT trigger
+ *   Decpl_RDY.  HAL_TIM_ACTIVE_CHANNEL_4 = 0x08 is naturally excluded because
+ *   0x08 is not in the 0x07 mask.  The previous guard
+ *   `htim->Channel < TIM_CHANNEL_4` was comparing against TIM_CHANNEL_4=0x0C
+ *   (a channel-select enum), while htim->Channel holds HAL_TIM_ActiveChannel
+ *   values (1,2,4,8).  HAL_TIM_ACTIVE_CHANNEL_4=0x08 < 0x0C, so CH4 would
+ *   have incorrectly set Decpl_RDY on any AS3935 edge.
+ *
+ *   chan_done is cleared in run_one_measurement() BEFORE DMA channels are
+ *   armed, not here, to avoid a race between the clear and a late-arriving TC.
+ */
+#define DECPL_CHANNELS_MASK  (HAL_TIM_ACTIVE_CHANNEL_1 | HAL_TIM_ACTIVE_CHANNEL_2 | HAL_TIM_ACTIVE_CHANNEL_3)  /* = 0x07u */
+
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
-	// We use only TIM2, so 
-	if (htim->Channel < TIM_CHANNEL_4 ) {
-		Decpl_RDY = 1;
-	}
+    static volatile uint8_t chan_done = 0u;
+    /* Accumulate only DECPL channels (CH1/2/3); ignore CH4 = AS3935 */
+    if ((htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1) || (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2) || (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_3)) {
+        chan_done |= (uint8_t)htim->Channel;
+        if ((chan_done & (uint8_t)DECPL_CHANNELS_MASK) == (uint8_t)DECPL_CHANNELS_MASK) {
+            chan_done  = 0u;
+            Decpl_RDY  = 1u;
+        }
+    }
+}
+
+/* Called by run_one_measurement() before arming DMA to reset the bitmask */
+void DECPL_ResetReadyFlag(void) {
+    /* Disable interrupts briefly to avoid a race if a stale TC fires here */
+    __disable_irq();
+    Decpl_RDY = 0u;
+    __enable_irq();
 }
 /* USER CODE END 1 */
