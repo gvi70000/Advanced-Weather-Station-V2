@@ -1,17 +1,28 @@
-/**
- ******************************************************************************
- * @file    TCS34003.h
- * @brief   Driver header for the TCS3400 Color Light-to-Digital Converter.
+/***************************************************************************
+ * @file [TCS34003].h/.c
+ * This file contains definitions, data structures, and functions
+ * for interfacing with the TCS34007 Color Light-to-Digital Converter.
  *
- * @details Provides register definitions, type-safe enumerations, packed
- *          bit-field structures, and the public API for the TCS3400 RGBC + IR
- *          sensor (ams OSRAM, I²C address 0x39 / 0x29).
- *
- *          Variant targeted: TCS34003 / TCS34007 (1.8 V I²C bus).
- *
- * @note    Datasheet reference: DS000411 v3-00 (2024-Jun-21)
- ******************************************************************************
- */
+ * Copyright (c) [2024] Grozea Ion gvi70000
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ ***************************************************************************/
 
 #ifndef TCS34003_H
 #define TCS34003_H
@@ -87,7 +98,8 @@
 #define TCS34003_CCT_COEFF_Z_GREEN        0.77073f  ///< Green weight for CIE Z
 #define TCS34003_CCT_COEFF_Z_BLUE         0.56332f  ///< Blue  weight for CIE Z
 
-/** CCT cubic polynomial: CCT = C1·n³ + C2·n² + C3·n + C4  (n = x / (x+y+z)) */
+/** CCT cubic polynomial: CCT = C1·n³ + C2·n² + C3·n + C4
+ *  where n = (x - X0) / (Y0 - y),  x and y are CIE chromaticity coordinates. */
 #define TCS34003_CCT_COEFF_C1             449.0f    ///< Cubic   term coefficient
 #define TCS34003_CCT_COEFF_C2            3525.0f    ///< Quadratic term coefficient
 #define TCS34003_CCT_COEFF_C3            6823.3f    ///< Linear   term coefficient
@@ -104,16 +116,34 @@
 /** @defgroup Irradiance_Constants Irradiance calculation constants
  *  @{
  */
-/** Typical clear-channel irradiance responsivity at 2700 K (counts / µW/cm²).
- *  Datasheet Fig. 8: typ. 14.0 counts/(µW/cm²) at AGAIN=16x, ATIME=0xF6. */
-#define TCS34003_RESPONSIVITY_CLEAR       14.0f
 
-/** Conversion factor: µW/cm² → W/m²  (1 µW/cm² = 0.01 W/m²). */
+/** @brief Typical clear-channel irradiance responsivity at reference conditions
+ *         (datasheet Fig. 8: AGAIN=16x, ATIME=0xF6 / 27.8 ms, CCT=2700K).
+ *         Units: counts/(µW/cm²). */
+#define TCS34003_RESPONSIVITY_CLEAR_REF   14.0f
+
+/** @brief Reference gain at which Re was characterised (datasheet Fig. 8). */
+#define TCS34003_CALIB_AGAIN_REF          16.0f
+
+/** @brief Reference integration time in ms at which Re was characterised (datasheet Fig. 8). */
+#define TCS34003_CALIB_ATIME_MS_REF       27.8f
+
+/** @brief Integration time step size in ms per cycle (datasheet Fig. 11, typ.). */
+#define TCS34003_ATIME_STEP_MS            2.78f
+
+/** @brief Conversion factor: µW/cm² → W/m²  (1 µW/cm² = 0.01 W/m²). */
 #define TCS34003_MICRO_TO_W_CONV          0.01f
+
 /** @} */
 
 /** @brief Mid-point of the 16-bit ADC range, used as a default interrupt threshold. */
 #define TCS34003_THRESHOLD_MID            0x7FFFU
+
+/** @brief CIE x chromaticity offset for McCamy CCT approximation. */
+#define TCS34003_CCT_COEFF_X0             0.3320f
+
+/** @brief CIE y chromaticity offset for McCamy CCT approximation. */
+#define TCS34003_CCT_COEFF_Y0             0.1858f
 
 /* ============================================================================
  * Register Structures and Enumerations
