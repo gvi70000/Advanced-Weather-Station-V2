@@ -98,8 +98,9 @@ extern volatile uint8_t Decpl_RDY;
 
 
 // TIM2 is 170MHz on STM32G431 and is setup to have 1us period
-#define TOF_MIN_US   400.0f
-#define TOF_MAX_US  2000.0f
+#define TOF_MIN_US			400.0f
+#define TOF_MAX_US			2000.0f
+#define PGA460_TEMP_ERR	100.0f
 
 const PGA460_Regs_t s0 = {
 		.EEData.UserData = {0}, // 0x00..0x13
@@ -255,9 +256,8 @@ static float PGA460_ComputeSoundSpeed(PGA460_EnvData_t *env) {
     if (!env) return SOUND_SPEED;
 	const float T_C = env->Temperature;
     const float T_K = T_C + KELVIN_OFFSET;
-    float P_hPa = env->Pressure;
 
-    // --- Pressure (hPa). If not provided, estimate from height with std. atmosphere (011 km) ---
+    // --- Pressure (hPa). If not provided, estimate from height with std. atmosphere (0?11 km) ---
     float P_hPa = env->Pressure;
     if (P_hPa <= 0.0) {
         const float h = env->Height; // meters
@@ -1206,9 +1206,9 @@ float PGA460_ReadTemperatureOrNoise(const uint8_t sensorID, const PGA460_CmdType
 /* Cone generator = v(R2 + h2) = v(502 + 1502) mm, converted to um */
 #define CONE_R_MM           50.0f
 #define CONE_H_MM           150.0f
-#define CONE_L_MM           158.114f               /* v(502+1502)    */
-#define CONE_L_UM           158114f               /* L in um        */
-
+#define CONE_L_MM           158.114f					/* v(502+1502)    */
+#define CONE_L_UM           158114						/* L in um        */
+#define NOMINAL_PATH_UM     2.0f * CONE_L_UM	/* 2 * CONE_L_UM */
 /*
  * Effective horizontal path unit vectors  *_ij = (pos_j - pos_i) / L
  *
@@ -1234,11 +1234,7 @@ float PGA460_ReadTemperatureOrNoise(const uint8_t sensorID, const PGA460_CmdType
  */
 #define LS_K    2.22222222222222f   /* 20/9 */
 
-/*
- * Default nominal path length (um) used before first calibration.
- * = 2 * CONE_L_UM  (round trip to reflector and back to opposite transducer)
- */
-#define NOMINAL_PATH_UM     2.0f * CONE_L_UM   /* 2 * CONE_L_UM */
+
 
 /*===========================================================================
  * CORDIC CONSTANTS
@@ -1603,15 +1599,15 @@ static HAL_StatusTypeDef run_one_measurement(uint8_t tx, float  *tof_rx1_us, flo
      * TOF_MIN_TICKS = 400 us * 170 = 68,000
      * TOF_MAX_TICKS = 2000 us * 170 = 340,000
      * (Physical range for 316 mm path: ~864-1033 us, guards are generous.) */
-    #define TOF_MIN_TICKS  68000UL
-    #define TOF_MAX_TICKS 340000UL
+    #define TOF_MIN_TICKS	400
+    #define TOF_MAX_TICKS	2000
 
     if (delta1 < TOF_MIN_TICKS || delta1 > TOF_MAX_TICKS || delta2 < TOF_MIN_TICKS || delta2 > TOF_MAX_TICKS) {
-        DEBUG("Tx%u: ToF ticks out of range (d1=%u, d2=%u) - expected %lu..%lu\n", tx, delta1, delta2, TOF_MIN_TICKS, TOF_MAX_TICKS);
+        DEBUG("Tx%u: ToF ticks out of range (d1=%d, d2=%d) - expected %d..%d\n", tx, delta1, delta2, TOF_MIN_TICKS, TOF_MAX_TICKS);
         return HAL_ERROR;
     }
-    *tof_rx1_us = TICK_TO_US(delta1);
-    *tof_rx2_us = TICK_TO_US(delta2);
+    *tof_rx1_us = delta1;
+    *tof_rx2_us = delta2;
     return HAL_OK;
 }
 
