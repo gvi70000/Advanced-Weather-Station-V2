@@ -43,10 +43,10 @@ void MX_TIM2_Init(void)
   TIM_IC_InitTypeDef sConfigIC = {0};
 
   /* USER CODE BEGIN TIM2_Init 1 */
-
+  /* htim2.Init.Prescaler = 169; to get 1us ticks */
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 0;
+  htim2.Init.Prescaler = 169;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 4294967295;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -241,7 +241,7 @@ void HAL_TIM_Base_MspDeInit(TIM_HandleTypeDef* tim_baseHandle)
  *   chan_done is cleared in run_one_measurement() BEFORE DMA channels are
  *   armed, not here, to avoid a race between the clear and a late-arriving TC.
  */
-#define DECPL_CHANNELS_MASK  (HAL_TIM_ACTIVE_CHANNEL_1 | HAL_TIM_ACTIVE_CHANNEL_2 | HAL_TIM_ACTIVE_CHANNEL_3)  /* = 0x07u */
+#define DECPL_CHANNELS_MASK (HAL_TIM_ACTIVE_CHANNEL_1 | HAL_TIM_ACTIVE_CHANNEL_2 | HAL_TIM_ACTIVE_CHANNEL_3)  /* = 0x07u */
 
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
     static volatile uint8_t chan_done = 0u;
@@ -262,4 +262,5 @@ void DECPL_ResetReadyFlag(void) {
     Decpl_RDY = 0u;
     __enable_irq();
 }
+
 /* USER CODE END 1 */
