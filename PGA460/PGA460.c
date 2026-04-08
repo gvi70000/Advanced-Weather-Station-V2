@@ -53,6 +53,7 @@ extern volatile uint8_t Decpl_RDY;
 #define R_D									287.05f			// Specific gas constant for dry air (J/kg.K)
 #define R_V									461.495f		// Specific gas constant for water vapor (J/kg.K)
 #define GAMMA								1.4f				// Adiabatic index for air
+#define GAMMA_R_D							GAMMA * R_D				// GAMMA * R_D
 #define L										0.0065f			// Temperature lapse rate (K/m)
 #define T0									288.15f			// Standard temperature at sea level (K)
 #define P0									101325.0f		// Standard pressure at sea level (Pa)
@@ -63,7 +64,7 @@ extern volatile uint8_t Decpl_RDY;
 #define RH_DIVISOR					100.0f			// Converts RH percentage to a fraction
 #define WATER_VAPOR_EFFECT	0.6077f			// Effect of water vapor on speed of sound
 #define SATURATION_CONSTANT	6.1078f			// Constant for saturation vapor pressure calculation
-
+#define SOUND_SPEED			343.0f
 #define INV_SQRT3						0.57735026919f			// 1/sqrt(3)
 #define DEG_PER_RAD					57.29577951308232f	// 180/pi
 // Conversion factor: half round-trip, microseconds ? seconds
@@ -94,11 +95,9 @@ extern volatile uint8_t Decpl_RDY;
 #define PGA_OBJ_DATA_SIZE (2 + (PGA_OBJECTS_TRACKED * 4))
 
 #define ULTRASONIC_SENSOR_COUNT	3	// Number of ultrasonic sensors in the array
-#define PGA460_TEMP_ERR			999.0f // Error value for temperature or noise
 
-// TIM2 is 170MHz on STM32G431
-#define TICK_TO_US(t) ((float)(t) * 0.00588235294117647058823529411765f)
 
+// TIM2 is 170MHz on STM32G431 and is setup to have 1us period
 #define TOF_MIN_US   400.0f
 #define TOF_MAX_US  2000.0f
 
@@ -219,7 +218,9 @@ const PGA460_Regs_t s2 = {
 // --- Array with 3 elements(sensors): [0] TVG, [1] Settings, [2] Thresholds ---
 PGA460_Sensor_t sensors[ULTRASONIC_SENSOR_COUNT] = {{ .Registers = s0 }, { .Registers = s1 }, { .Registers = s2 }};
 
-/* PGA460_EnvData_t is declared in PGA460.h */
+/* PGA460_EnvData_t is declared in PGA460.h
+   It is filled in the main.c where we read the
+   sensors and we fill the data in structure*/
 
 PGA460_EnvData_t externalData = {
     .Height      = 58.0f,     // meters
@@ -228,8 +229,6 @@ PGA460_EnvData_t externalData = {
     .Pressure    = 1027.7f,   // hPa
     .SoundSpeed  = 0.0f       // will be computed
 };
-
-float soundSpeed = 343.0f;
 
 // Helper to convert float to Q31 for CORDIC
 static int32_t float_to_q31(float val) {
@@ -250,32 +249,42 @@ static float q31_to_float(int32_t qval) {
  *          Height using the ISA troposphere barometric formula.  Result is stored in
  *          env->SoundSpeed and also returned.
  * @param env  Pointer to PGA460_EnvData_t (Temperature, RH, Pressure, Height).
- * @return Speed of sound in m/s, or 343.0f if env is NULL.
+ * @return Speed of sound in m/s(um/us), or 343.0f if env is NULL.
  */
 static float PGA460_ComputeSoundSpeed(PGA460_EnvData_t *env) {
-    if (!env || env->Temperature > 85.0f || env->Temperature < -45.0f) return 343.0f;
-
-    const float T_C = env->Temperature;
-    const float T_K = T_C + 273.15f;
+    if (!env) return SOUND_SPEED;
+	const float T_C = env->Temperature;
+    const float T_K = T_C + KELVIN_OFFSET;
     float P_hPa = env->Pressure;
 
-    if (P_hPa <= 0.0f) {
-        // Use powf for Hardware FPU efficiency
-        const float term = 1.0f - (0.0065f * env->Height) / 288.15f;
-        P_hPa = 1013.25f * powf(term, 5.255f); 
-        env->Pressure = P_hPa;
+    // --- Pressure (hPa). If not provided, estimate from height with std. atmosphere (011 km) ---
+    float P_hPa = env->Pressure;
+    if (P_hPa <= 0.0) {
+        const float h = env->Height; // meters
+        // Barometric formula (troposphere):
+        // P = P0 * (1 - L*h/T0)^(g*M/(R*L))  [Pa]
+        const float term = 1.0 - (L * h) / T0;
+        const float expo = (G * M) / (R * L);
+        float P_Pa = P0 * pow(term, expo);
+        if (P_Pa < 1.0) P_Pa = 1.0; // guard
+        P_hPa = P_Pa * 0.01;        // convert Pa to hPa
+        env->Pressure = (float)P_hPa;
     }
-
-    const float RH_frac = env->RH / 100.0f;
-    // FIX: Use expf for Hardware FPU
-    const float es = 6.1078f * expf(17.269f * T_C / (T_C + 237.3f));
+	// --- Relative humidity as fraction ---
+    const float RH_frac = env->RH / RH_DIVISOR;
+	// --- Saturation vapor pressure over water (Tetens, hPa) ---
+    // es = 6.1078 * exp(17.2693882 * T_C / (T_C + 237.3))
+    const float es = SATURATION_CONSTANT * expf(17.269f * T_C / (T_C + 237.3f));
+	// Actual vapor pressure (hPa)
     const float e = RH_frac * es;
+	 // Mixing ratio (kg/kg); 0.62198  Rd/Rv ratio factor
     const float w = 0.62198f * e / fmaxf(1e-6f, (P_hPa - e));
+	// Specific humidity
     const float q = w / (1.0f + w);
+	// Virtual temperature Tv = T * (1 + (Rv/Rd - 1)*q); WATER_VAPOR_EFFECT 0.6077
     const float Tv = T_K * (1.0f + 0.6077f * q);
-    
-    // FIX: Use sqrtf
-    float c = sqrtf(401.87f * Tv); 
+    // Speed of sound in moist air: c = sqrt(gamma * Rd * Tv)
+    float c = sqrtf(GAMMA_R_D * Tv); 
     env->SoundSpeed = c;
     return c;
 }
@@ -940,7 +949,7 @@ HAL_StatusTypeDef PGA460_GetUltrasonicMeasurement(const uint8_t sensorID) {
         return HAL_ERROR;
     }
     // Update speed of sound from environment
-    PGA460_ComputeSoundSpeed(&externalData);
+    // PGA460_ComputeSoundSpeed(&externalData);
     HAL_StatusTypeDef status = HAL_ERROR;
     uint8_t stored = 0;
     // 3) Parse each object, store first valid into sensors[sensorID].Measures
@@ -952,18 +961,15 @@ HAL_StatusTypeDef PGA460_GetUltrasonicMeasurement(const uint8_t sensorID) {
         //DEBUG("Sensor %d: Raw TOF = %04X\n", sensorID, rawTOF);
         if (rawTOF > 0 && rawTOF != 0xFFFF) {
             const uint16_t width_us = (uint16_t)widthRaw * 16;
-            //const float distance_m  = (float)rawTOF * TOF_US_TO_S * externalData.SoundSpeed;
             if (!stored) {
                 sensors[sensorID].Measures.tof_us    = rawTOF;
                 sensors[sensorID].Measures.width     = (uint8_t)((width_us > 255) ? 255 : width_us);
                 sensors[sensorID].Measures.amplitude = amplitude;
-                //sensors[sensorID].Measures.distance  = distance_m;
                 stored = 1;
             }
-            //DEBUG("Sensor %d: Obj %u -> %.3f m, Width = %u us, Amplitude = %u\n", sensorID, (unsigned)(i + 1), distance_m, width_us, amplitude);
             status = HAL_OK;
         } else {
-            //DEBUG("Sensor %d: Obj %u -> Invalid (TOF = 0x%04X)\n", sensorID, (unsigned)(i + 1), rawTOF);
+            DEBUG("Sensor %d: Obj %u -> Invalid (TOF = 0x%04X)\n", sensorID, (unsigned)(i + 1), rawTOF);
         }
     }
     return status;
@@ -1193,140 +1199,8 @@ float PGA460_ReadTemperatureOrNoise(const uint8_t sensorID, const PGA460_CmdType
 	return result;
 }
 
-/**
- * @brief Execute one full 3-transmitter ToF cycle using legacy busy-wait timing.
- * @details NOTE: This function is superseded by run_one_measurement() which uses TIM2
- *          input-capture DMA for precise hardware timestamping.  Retained for reference.
- *
- *          For each transmitter Tx in {0, 1, 2}:
- *            1. Arms TIM2 DMA on channels 1/2/3 for 2 captures each.
- *            2. Sends BROADCAST_BURST_AND_LISTEN_P2 (reference edge -> E0).
- *            3. Sends BURST_AND_LISTEN_PRESET1 on Tx (burst edge -> E1).
- *            4. Waits 5 ms (blind busy-wait -- imprecise).
- *            5. Reads UMR from each receiver and subtracts the UART scheduling offset.
- * @param reading  Output array of 3 DecplTimes_t; E0 = Tx->Rx1 ToF, E1 = Tx->Rx2 ToF.
- */
-void getCycleToF(DecplTimes_t *reading) {
-	uint32_t OffsetTime[2] = {0, 0};
-	for (uint8_t i = 0; i < 3; i++) {
-		uint8_t Tx = i;													// Transmitter index
-		uint8_t Rx1 = (i == 0) ? 1 : 0;					// Receiver1 index
-		uint8_t Rx2 = (uint8_t)(3 - Tx - Rx1);	// Receiver2 index
-		// Start the timers
-		HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_1, (uint32_t*)&ToF_Result[0].E0, 2); // DECPL on tranducer 0
-		HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_2, (uint32_t*)&ToF_Result[1].E0, 2); // DECPL on tranducer 1
-		HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_3, (uint32_t*)&ToF_Result[2].E0, 2); // DECPL on tranducer 2
-		// Send commands to PGAs
-		PGA460_UltrasonicCmd(Rx1, PGA460_CMD_BROADCAST_BURST_AND_LISTEN_P2, 1); // We can use any sensor ID since is broadcast
-		PGA460_UltrasonicCmd(Tx, PGA460_CMD_BURST_AND_LISTEN_PRESET1, 1); // Wait 5ms or the interrupt ready
-		// Wait for listening window to close
-		// ToDo Find a diffrent way
-		uint32_t endTime = HAL_GetTick() + 5;
-		while(HAL_GetTick()< endTime) {}
-		// Stop the timers or wait DMA interrupt?	
-		HAL_TIM_IC_Stop_DMA(&htim2, TIM_CHANNEL_1); // DECPL on tranducer 0
-		HAL_TIM_IC_Stop_DMA(&htim2, TIM_CHANNEL_2); // DECPL on tranducer 1
-		HAL_TIM_IC_Stop_DMA(&htim2, TIM_CHANNEL_3); // DECPL on tranducer 2
-		// Set signal pin low, it goes high when the transmission ends
-		HAL_GPIO_WritePin(GPIOA, SGN_Pin, GPIO_PIN_RESET);
-		// Read DecplTimes and calculate Offsets
-		// Offset = Sender time - receiver time
-		// ToF_Result[Tx].E0 is triggerd by the BROADCAST_BURST_AND_LISTEN_P2, so we do not need it
-		// ToF_Result[Tx].E1 is triggerd by the BURST_AND_LISTEN_PRESET1, the actual burst
-		OffsetTime[Rx1] = ToF_Result[Tx].E1 - ToF_Result[Rx1].E0;
-		OffsetTime[Rx2] = ToF_Result[Tx].E1 - ToF_Result[Rx2].E0;
-		// Read ToF
-		reading[Tx].E0 = PGA460_GetUltrasonicMeasurement(Rx1);
-		reading[Tx].E1 = PGA460_GetUltrasonicMeasurement(Rx2);
-		// Remove Offset
-		reading[Tx].E0 -= OffsetTime[Rx1];
-		reading[Tx].E1 -= OffsetTime[Rx2];
-	}
-}
-
-//// ---- Helper Macros ----
-//#define DECPL_TIM      TIM2
-
-//#define DMA_CH(idx)    ((idx)==0 ? DMA1_Channel3 : (idx)==1 ? DMA1_Channel4 : DMA1_Channel5)
-
-//#define DIER_DMA(idx)  ((idx)==0 ? TIM_DIER_CC1DE : (idx)==1 ? TIM_DIER_CC2DE : TIM_DIER_CC3DE)
-//#define CCER_EN(idx)   ((idx)==0 ? TIM_CCER_CC1E  : (idx)==1 ? TIM_CCER_CC2E  : TIM_CCER_CC3E)
-
-//#define CCR_ADDR(idx)  ((idx)==0 ? (uint32_t)&TIM2->CCR1 :                         (idx)==1 ? (uint32_t)&TIM2->CCR2 :                                    (uint32_t)&TIM2->CCR3)
-
-//// ---- DMA Config ----
-//static inline void DMA_Config_Channel(uint8_t idx, uint32_t memAddr, uint16_t count) {
-//    DMA_Channel_TypeDef *ch = DMA_CH(idx);
-//    ch->CCR &= ~DMA_CCR_EN;
-//    ch->CMAR  = memAddr;
-//    ch->CNDTR = count;
-//    ch->CPAR  = CCR_ADDR(idx);
-//    ch->CCR |= DMA_CCR_EN;
-//}
-
-//// ---- TIM Enable/Disable ----
-//static inline void TIM_Enable3(uint8_t a, uint8_t b, uint8_t c) {
-//    DECPL_TIM->SR   = 0;
-//    DECPL_TIM->DIER |=  (DIER_DMA(a) | DIER_DMA(b) | DIER_DMA(c));
-//    DECPL_TIM->CCER |=  (CCER_EN(a)  | CCER_EN(b)  | CCER_EN(c));
-//}
-
-//static inline void TIM_Disable3(uint8_t a, uint8_t b, uint8_t c) {
-//    DECPL_TIM->CCER &= ~(CCER_EN(a)  | CCER_EN(b)  | CCER_EN(c));
-//    DECPL_TIM->DIER &= ~(DIER_DMA(a) | DIER_DMA(b) | DIER_DMA(c));
-//}
-
-//// ---- Final getCycleToF() ----
-//void getCycleToF1(DecplTimes_t *reading) {
-//    memset(ToF_Result, 0, sizeof(ToF_Result));
-
-//    if (!(TIM2->CR1 & TIM_CR1_CEN))
-//        TIM2->CR1 |= TIM_CR1_CEN;
-
-//    for (uint8_t Tx = 0; Tx < 3; Tx++) {
-//        uint8_t Rx1 = (Tx == 0) ? 1 : 0;
-//        uint8_t Rx2 = 3 - Tx - Rx1;
-
-//        DMA_Config_Channel(Tx,  (uint32_t)&ToF_Result[Tx].E0,  2);
-//        DMA_Config_Channel(Rx1, (uint32_t)&ToF_Result[Rx1].E0, 1);
-//        DMA_Config_Channel(Rx2, (uint32_t)&ToF_Result[Rx2].E0, 1);
-
-//        TIM_Enable3(Tx, Rx1, Rx2);
-
-//        PGA460_UltrasonicCmd(Rx1, PGA460_CMD_BROADCAST_BURST_AND_LISTEN_P2, 1);
-//        PGA460_UltrasonicCmd(Tx,  PGA460_CMD_BURST_AND_LISTEN_PRESET1,       1);
-
-//        uint32_t t0 = HAL_GetTick();
-//        while (ToF_Result[Tx].E1 == 0) {
-//            if (HAL_GetTick() - t0 > 5) break;
-//        }
-
-//        TIM_Disable3(Tx, Rx1, Rx2);
-
-//        DMA_CH(Tx)->CCR  &= ~DMA_CCR_EN;
-//        DMA_CH(Rx1)->CCR &= ~DMA_CCR_EN;
-//        DMA_CH(Rx2)->CCR &= ~DMA_CCR_EN;
-
-//        HAL_GPIO_WritePin(GPIOA, SGN_Pin, GPIO_PIN_RESET);
-
-//        reading[Tx].E0 = PGA460_GetUltrasonicMeasurement(Rx1) - (ToF_Result[Tx].E1 - ToF_Result[Rx1].E0) / 10;
-
-//        reading[Tx].E1 = PGA460_GetUltrasonicMeasurement(Rx2) - (ToF_Result[Tx].E1 - ToF_Result[Rx2].E0) / 10;
-//    }
-//}
-
 /*===========================================================================
- * WIND MEASUREMENT & CALIBRATION (formerly PGA460_wind.c)
- * Merged into PGA460.c - see PGA460.h for public API declarations.
- *===========================================================================*/
-/*---------------------------------------------------------------------------
- * External symbols provided by the application / ISR layer
- *--------------------------------------------------------------------------*/
-
-/* Sensors array (defined in PGA460.c) */
-
-/*===========================================================================
- * GEOMETRY CONSTANTS  (compile-time, um)
+ * WIND MEASUREMENT & CALIBRATION
  *===========================================================================*/
 
 /* Cone generator = v(R2 + h2) = v(502 + 1502) mm, converted to um */
@@ -1343,16 +1217,16 @@ void getCycleToF(DecplTimes_t *reading) {
  *   T1 = (+43.3013,    -25)          - 120deg East
  *   T2 = (-43.3013,    -25)          - 240deg East
  *
- * Distances |Ti-Tj| = Rv3 = 86.603 mm for all pairs (equilateral triangle).
+ * Distances |Ti-Tj| = Rv3 = 86.6025 mm for all pairs (equilateral triangle).
  */
-#define U01_X    0.27386127875258f   /* (T1x - T0x) / L */
-#define U01_Y   (-0.47434164902526f) /* (T1y - T0y) / L */
+#define U01_X    0.27386126465714610976890091958966f   /* (T1x - T0x) / L */
+#define U01_Y   (-0.47434129805077349254335479464184f) /* (T1y - T0y) / L */
 
-#define U12_X   (-0.54772255750517f) /* (T2x - T1x) / L */
-#define U12_Y    0.00000000000000f   /* (T2y - T1y) / L */
+#define U12_X   (-0.54772252931429221953780183917933f) /* (T2x - T1x) / L */
+#define U12_Y    0.00000000000000000000000000000000f   /* (T2y - T1y) / L */
 
-#define U20_X    0.27386127875258f   /* (T0x - T2x) / L */
-#define U20_Y    0.47434164902526f   /* (T0y - T2y) / L */
+#define U20_X    0.27386126465714610976890091958966f   /* (T0x - T2x) / L */
+#define U20_Y    0.47434129805077349254335479464184f   /* (T0y - T2y) / L */
 
 /*
  * Least-squares weight K = (A^T A)^{-1} scalar = 1/0.45 = 20/9
@@ -1364,7 +1238,7 @@ void getCycleToF(DecplTimes_t *reading) {
  * Default nominal path length (um) used before first calibration.
  * = 2 * CONE_L_UM  (round trip to reflector and back to opposite transducer)
  */
-#define NOMINAL_PATH_UM     316227.766016838f   /* 2 * CONE_L_UM */
+#define NOMINAL_PATH_UM     2.0f * CONE_L_UM   /* 2 * CONE_L_UM */
 
 /*===========================================================================
  * CORDIC CONSTANTS
@@ -1415,11 +1289,7 @@ extern void DECPL_ResetReadyFlag(void);
 
 /* Calibrated one-way path lengths in um for each transmitting sensor.
  * Index i = transmitter index.  Populated by PGA460_CalibrateReflector(). */
-static float g_pathLen_um[3] = {
-    NOMINAL_PATH_UM,
-    NOMINAL_PATH_UM,
-    NOMINAL_PATH_UM
-};
+static float g_pathLen_um[3] = {NOMINAL_PATH_UM, NOMINAL_PATH_UM, NOMINAL_PATH_UM};
 
 /*===========================================================================
  * SLIDING-WINDOW MEDIAN FILTER

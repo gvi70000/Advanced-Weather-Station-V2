@@ -321,13 +321,6 @@ typedef struct __attribute__((packed)) {
     uint8_t THR_CRC;     // Threshold map CRC (0x7F, auto-calculated)
 } Thresholds_t;
 
-// @brief Single ultrasonic measurement result decoded from the PGA460 response frame.
-typedef struct __attribute__((packed)) {
-    uint16_t tof_us;    // Time-of-flight in microseconds (PGA460 UART result, 1 LSB = 1 us)
-    uint8_t  width;     // Echo pulse width (raw byte; 1 LSB = 16 us after scaling)
-    uint8_t  amplitude; // Echo peak amplitude (raw 8-bit value, higher = stronger echo)
-} PGA460_Measure_t;
-
 // @brief Full 44-byte EEPROM image layout (registers 0x00-0x2B).
 // @details This is the exact byte sequence sent and received by the EEPROM
 //          bulk-write (CMD 0x0C) and bulk-read (CMD 0x0B) commands.
@@ -352,13 +345,6 @@ typedef struct __attribute__((packed)) {
     uint8_t     eepromUnlocked; // Software flag: 1 = EEPROM currently unlocked
 } PGA460_Regs_t;
 
-// @brief Per-sensor state: register shadow and last measurement result.
-typedef struct __attribute__((packed)) {
-    PGA460_Regs_t    Registers;  // Full register shadow (see PGA460_Regs_t)
-    PGA460_Measure_t Measures;   // Most recent ultrasonic measurement result
-    // Note: the sensor's UART address equals its index in the sensors[] array.
-} PGA460_Sensor_t;
-
 // @brief AFE gain range selection encoded in DECPL_TEMP[7:6].
 // @details Controls the front-end amplifier gain window (min-max dB).
 //          Write via PGA460_SetTVG() which preserves the lower 6 bits of REG_DECPL_TEMP.
@@ -375,19 +361,25 @@ typedef enum {
     PGA460_CMD_GET_NOISE = 0x01   // Request ambient noise level measurement
 } PGA460_CmdType_t;
 
+// @brief Single ultrasonic measurement result decoded from the PGA460 response frame.
+typedef struct __attribute__((packed)) {
+    uint16_t tof_us;    // Time-of-flight in microseconds (PGA460 UART result, 1 LSB = 1 us)
+    uint8_t  width;     // Echo pulse width (raw byte; 1 LSB = 16 us after scaling)
+    uint8_t  amplitude; // Echo peak amplitude (raw 8-bit value, higher = stronger echo)
+} PGA460_Measure_t;
+
+// @brief Per-sensor state: register shadow and last measurement result.
+typedef struct __attribute__((packed)) {
+    PGA460_Regs_t    Registers;  // Full register shadow (see PGA460_Regs_t)
+    PGA460_Measure_t Measures;   // Most recent ultrasonic measurement result
+    // Note: the sensor's UART address equals its index in the sensors[] array.
+} PGA460_Sensor_t;
+
 // @brief Wind measurement result returned by PGA460_MeasureWind().
 typedef struct __attribute__((packed)) {
     float Speed;      // Wind speed in m/s
     float Direction;  // Wind direction in degrees FROM (0/360 = N, 90 = E, 180 = S, 270 = W)
 } PGA460_Wind_t;
-
-// @brief TIM2 input-capture DMA result for one DECPL channel.
-// @details TIM2 runs at 170 MHz (no prescaler).  DMA captures two consecutive
-//          rising edges per channel:
-//          E0 = first edge (broadcast LISTEN command decouple - reference, discarded).
-//          E1 = second edge (echo threshold crossing on receivers;
-//                            end of burst decouple period on the transmitter).
-
 
 // @brief Environmental data used to compute the speed of sound in moist air.
 // @details Populate via BMP581 (Temperature, Pressure), HDC302x (RH), and GPS (Height).
