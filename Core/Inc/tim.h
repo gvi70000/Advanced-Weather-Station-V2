@@ -29,6 +29,8 @@ extern "C" {
 #include "main.h"
 
 /* USER CODE BEGIN Includes */
+// Pulse P2 is set with 0 pulses and 50mA
+// Pulse P1 is the measurement pulse
 typedef struct __attribute__((packed)) {
     uint32_t	E0;	// Rising Edge recorded on broadcasting BURST_AND_LISTEN_P2
     uint32_t	E1;	// Rising Edge recorded on BURST_AND_LISTEN_PRESET1 for specific Tx
