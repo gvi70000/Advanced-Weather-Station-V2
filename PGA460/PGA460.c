@@ -814,7 +814,6 @@ HAL_StatusTypeDef PGA460_UltrasonicCmd(const uint8_t sensorID, const PGA460_Comm
  * @details Sends CMD 0x05 (Ultrasonic Measurement Result) and receives the response.
  *          Iterates through up to PGA_OBJECTS_TRACKED objects; stores the first valid
  *          result (rawTOF > 0 and != 0xFFFF) into sensors[sensorID].Measures.
- *          Also updates externalData.SoundSpeed via PGA460_ComputeSoundSpeed().
  * @param sensorID  Sensor UART address (0-7).
  * @return HAL status.
  */
@@ -834,8 +833,6 @@ HAL_StatusTypeDef PGA460_GetUltrasonicMeasurement(const uint8_t sensorID) {
         DEBUG("Sensor %d: Measurement Result Retrieval Failed!\n", sensorID);
         return HAL_ERROR;
     }
-    // Update speed of sound from environment
-    // PGA460_ComputeSoundSpeed(&externalData);
     HAL_StatusTypeDef status = HAL_ERROR;
     uint8_t stored = 0;
     // 3) Parse each object, store first valid into sensors[sensorID].Measures
