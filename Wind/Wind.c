@@ -71,9 +71,9 @@ extern volatile uint8_t Decpl_RDY;
 // 6 pulses at 58kHz are 104us
 // Time window of interst is from 600us to 1200us
 	
-#define PGA460_BASE_DIAMETER_UM				100000	// In micro meters
-#define PGA460_DISTANCE_UM						316228	// In micro meters
-#define PGA460_CAPTURE_DELAY_MS				70			// Delay for sensor measurement to complete
+#define BASE_DIAMETER_UM				100000	// In micro meters
+#define DISTANCE_UM						316228	// In micro meters
+#define CAPTURE_DELAY_MS				70			// Delay for sensor measurement to complete
 
 /* Cone generator = v(R2 + h2) = v(502 + 1502) mm, converted to um */
 #define CONE_R_MM           50.0f
@@ -110,8 +110,8 @@ extern volatile uint8_t Decpl_RDY;
  * before being written to the CORDIC (which requires inputs in [-1, 1]).
  * 100 m/s covers any meteorological condition with comfortable headroom.
  */
-#define WIND_CORDIC_SCALE   100.0f						/* m/s (= um/us)						*/
-#define WIND_CORDIC_INV     0.01f							/* 1 / WIND_CORDIC_SCALE		*/
+#define CORDIC_SCALE   100.0f						/* m/s (= um/us)						*/
+#define CORDIC_INV     0.01f							/* 1 / WIND_CORDIC_SCALE		*/
 
 /* Q1.31 scale factor: maps float [-1,1] to int32_t */
 #define Q31_SCALE           2147483647.0f			/* 2^31 - 1                 */
@@ -141,7 +141,7 @@ extern volatile uint8_t Decpl_RDY;
  * SLIDING-WINDOW MEDIAN FILTER
  *
  * Each of the 6 one-way ToF values has its own circular buffer of depth
- * N_FILT.  On every call to PGA460_MeasureWind() one raw hardware measurement
+ * N_FILT.  On every call to Wind_MeasureWind() one raw hardware measurement
  * cycle is collected (3 transmitter firings -> 6 ToFs via TIM2 DECPL DMA),
  * inserted into the six buffers, and then the median of each buffer is used
  * for the wind calculation.
@@ -182,10 +182,10 @@ static uint8_t g_tof_count[TOF_PATH_COUNT];           /* valid sample count   */
 /* Calibrated one-way path lengths in um for each transmitting sensor.
  * Bytes 0-3 of USER_DATA in the transmitting sensor = IEEE-754 float32.
  * Sensor 0 stores D01, Sensor 1 stores D12, Sensor 2 stores D20.
- * Index i = transmitter index.  Populated by PGA460_CalibrateReflector(). */
+ * Index i = transmitter index.  Populated by Wind_CalibrateReflector(). */
 static float g_pathLen_um[3] = {NOMINAL_PATH_UM, NOMINAL_PATH_UM, NOMINAL_PATH_UM};
 
-/* PGA460_EnvData_t is declared in PGA460.h
+/* Wind_EnvData_t is declared in PGA460.h
    It is filled in the main.c where we read the
    sensors and we fill the data in structure*/
 
@@ -203,7 +203,7 @@ Wind_EnvData_t externalData = {
  *          pressure, and relative humidity.  If Pressure <= 0, it is estimated from
  *          Height using the ISA troposphere barometric formula.  Result is stored in
  *          env->SoundSpeed and also returned.
- * @param env  Pointer to PGA460_EnvData_t (Temperature, RH, Pressure, Height).
+ * @param env  Pointer to Wind_EnvData_t (Temperature, RH, Pressure, Height).
  * @return Speed of sound in m/s(um/us), or 343.0f if env is NULL.
  */
 static float Wind_ComputeSoundSpeed(Wind_EnvData_t *env) {
@@ -246,7 +246,7 @@ static float Wind_ComputeSoundSpeed(Wind_EnvData_t *env) {
 /**
  * @brief Clear all six per-path sliding-window ToF buffers.
  * @details Resets head index and sample count to zero for every path.
- *          Call after PGA460_Init() and after any recalibration.
+ *          Call after Wind_Init() and after any recalibration.
  */
 static void ResetFilter(void) {
     for (uint8_t p = 0; p < (uint8_t)TOF_PATH_COUNT; p++) {
@@ -488,7 +488,7 @@ static HAL_StatusTypeDef run_one_measurement(uint8_t tx, float  *tof_rx1_us, flo
 /**
  * @brief Write a float32 calibrated path length to USER_DATA bytes 0-3 of a sensor.
  * @details Splits the IEEE-754 float into 4 bytes using memcpy and writes each byte
- *          to REG_USER_DATA1 + offset (0-3) via PGA460_RegisterWrite().
+ *          to REG_USER_DATA1 + offset (0-3) via Wind_RegisterWrite().
  * @param sensorID  Sensor UART address (0-7).
  * @param path_um  Calibrated one-way acoustic path length in um.
  * @return HAL status.
@@ -535,12 +535,12 @@ static float load_path_from_eeprom(uint8_t sensorID) {
 }
 
 /**
- * @brief PGA460_LoadCalibration function implementation.
+ * @brief Wind_LoadCalibration function implementation.
  * @details Calls load_path_from_eeprom() for each of the three sensors and stores the
  *          result in g_pathLen_um[].  Falls back to NOMINAL_PATH_UM on failure.
- *          Call once at boot after PGA460_Init() so prior calibrations survive power-off.
+ *          Call once at boot after Wind_Init() so prior calibrations survive power-off.
  */
-void PGA460_LoadCalibration(void)
+void Wind_LoadCalibration(void)
 {
     for (uint8_t i = 0; i < 3; i++) {
         g_pathLen_um[i] = load_path_from_eeprom(i);
@@ -549,9 +549,9 @@ void PGA460_LoadCalibration(void)
 }
 
 /**
- * @brief PGA460_UpdateEnvironment function implementation.
+ * @brief Wind_UpdateEnvironment function implementation.
  * @details Writes tempC, rh, hPa, and height_m into externalData and calls
- *          PGA460_ComputeSoundSpeed() to refresh externalData.SoundSpeed.
+ *          Wind_ComputeSoundSpeed() to refresh externalData.SoundSpeed.
  *          Call whenever BMP581, HDC302x, or GPS data is refreshed.
  * @param tempC  Ambient temperature in degrees Celsius.
  * @param rh  Relative humidity in %.
@@ -568,7 +568,7 @@ void Wind_UpdateEnvironment(float tempC, float rh, float hPa, float height_m) {
 }
 
 /**
- * @brief PGA460_CalibrateReflector function implementation.
+ * @brief Wind_CalibrateReflector function implementation.
  * @details Performs bidirectional still-air calibration for all three transducer pairs.
  *
  *          Repeats N_CAL full measurement cycles (3 transmitter firings each).  For each
@@ -582,16 +582,16 @@ void Wind_UpdateEnvironment(float tempC, float rh, float hPa, float height_m) {
  *            D_20 -> sensor 2 USER_DATA (tof[2][0], tof[0][1])
  *
  *          Returns HAL_ERROR if fewer than N_CAL/2 cycles produce valid measurements.
- * @param soundSpeed_ms  Speed of sound in m/s from PGA460_UpdateEnvironment() (1 m/s = 1 um/us).
+ * @param soundSpeed_ms  Speed of sound in m/s from Wind_UpdateEnvironment() (1 m/s = 1 um/us).
  * @param burnEEPROM  1 = commit calibration to PGA460 EEPROM flash; 0 = RAM only.
  * @return HAL status.
  */
-HAL_StatusTypeDef PGA460_CalibrateReflector(float soundSpeed_ms, uint8_t burnEEPROM) {
+HAL_StatusTypeDef Wind_CalibrateReflector(float soundSpeed_ms, uint8_t burnEEPROM) {
     const float c = soundSpeed_ms;   /* 1 m/s = 1 um/us exactly */
     DEBUG("Calibration start: c = %.4f m/s, N_CAL = %u\n", c, N_CAL);
     /*
      * Accumulators for the six one-way ToF sums (us).
-     * Index mapping mirrors the tof[tx][rx_slot] layout in PGA460_MeasureWind.
+     * Index mapping mirrors the tof[tx][rx_slot] layout in Wind_MeasureWind.
      *   sum[0][0] = S t_01,  sum[0][1] = S t_02
      *   sum[1][0] = S t_10,  sum[1][1] = S t_12
      *   sum[2][0] = S t_20,  sum[2][1] = S t_21
@@ -664,7 +664,7 @@ HAL_StatusTypeDef PGA460_CalibrateReflector(float soundSpeed_ms, uint8_t burnEEP
 }
 
 /**
- * @brief PGA460_MeasureWind function implementation.
+ * @brief Wind_MeasureWind function implementation.
  * @details Executes a full 3-transmitter measurement cycle and returns the filtered wind vector.
  *
  *          Step 1 - Hardware cycle: fires each transmitter, captures 6 raw one-way ToF
@@ -801,7 +801,7 @@ HAL_StatusTypeDef Wind_Measure(Wind_t *out) {
      * No circular-mean issue: direction is computed from the (vx,vy) vector
      * which was reconstructed from median ToFs -- no 0/360 wraparound problem.
      *=========================================================================*/
-    float speed = cordic_magnitude(vx * WIND_CORDIC_INV, vy * WIND_CORDIC_INV) * WIND_CORDIC_SCALE;
+    float speed = cordic_magnitude(vx * CORDIC_INV, vy * CORDIC_INV) * CORDIC_SCALE;
     float angle_to = cordic_atan2_deg(vx, vy);   /* TO direction [-180,+180) */
     float dir_from = angle_to + 180.0f;
     if (dir_from >= 360.0f) { dir_from -= 360.0f; }

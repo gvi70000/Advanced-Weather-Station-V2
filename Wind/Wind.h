@@ -97,4 +97,4 @@ void Wind_UpdateEnvironment(float tempC, float rh, float hPa, float height_m);
 // @return HAL status.
 HAL_StatusTypeDef Wind_Measure(Wind_t *out);
 
-#endif // PGA460_H
+#endif // WIND_H
