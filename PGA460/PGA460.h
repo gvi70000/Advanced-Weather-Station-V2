@@ -337,8 +337,8 @@ typedef struct __attribute__((packed)) {
 typedef struct __attribute__((packed)) {
     EEImage_t   EEData;         // 0x00-0x2B - EEPROM image
     EE_CNTRL_t  eeCtrl;         // 0x40      - EEPROM control
-    Filters_t   Filters;        // 0x41-0x4A - digital filter coefficients
-    TEST_MUX_t  TestMux;        // 0x4B      - test mux
+    //Filters_t   Filters;        // 0x41-0x4A - digital filter coefficients
+    //TEST_MUX_t  TestMux;        // 0x4B      - test mux
     DEV_STAT0_t Stat0;          // 0x4C      - device status 0
     DEV_STAT1_t Stat1;          // 0x4D      - device status 1
     Thresholds_t THR;           // 0x5F-0x7F - threshold map
@@ -374,28 +374,6 @@ typedef struct __attribute__((packed)) {
     PGA460_Measure_t Measures;   // Most recent ultrasonic measurement result
     // Note: the sensor's UART address equals its index in the sensors[] array.
 } PGA460_Sensor_t;
-
-// @brief Wind measurement result returned by PGA460_MeasureWind().
-typedef struct __attribute__((packed)) {
-    float Speed;      // Wind speed in m/s
-    float Direction;  // Wind direction in degrees FROM (0/360 = N, 90 = E, 180 = S, 270 = W)
-} PGA460_Wind_t;
-
-// @brief Environmental data used to compute the speed of sound in moist air.
-// @details Populate via BMP581 (Temperature, Pressure), HDC302x (RH), and GPS (Height).
-//          Call PGA460_UpdateEnvironment() to update and recompute SoundSpeed.
-//          SoundSpeed is then used automatically by PGA460_MeasureWind().
-typedef struct __attribute__((packed)) {
-    float Height;      // Altitude above sea level in metres (from GPS; 0 to use barometric estimate)
-    float Temperature; // Ambient temperature in degrees Celsius (from BMP581 / HDC302x)
-    float RH;          // Relative humidity in % (from HDC302x)
-    float Pressure;    // Atmospheric pressure in hPa (from BMP581; 0 to estimate from Height)
-    float SoundSpeed;  // Speed of sound in m/s - computed by PGA460_UpdateEnvironment()
-} PGA460_EnvData_t;
-
-// Global environmental data instance (defined in PGA460.c).
-// Read SoundSpeed after calling PGA460_UpdateEnvironment().
-extern PGA460_EnvData_t externalData;
 
 // -----------------------------------------------------------------
 // Public function prototypes
@@ -512,49 +490,5 @@ HAL_StatusTypeDef PGA460_GetSystemDiagnostics(const uint8_t sensorID, const uint
 // @param mode      PGA460_CMD_GET_TEMP or PGA460_CMD_GET_NOISE.
 // @return Temperature in degC, or raw noise byte, or PGA460_TEMP_ERR (999.0f) on failure.
 float PGA460_ReadTemperatureOrNoise(const uint8_t sensorID, const PGA460_CmdType_t mode);
-
-// Wind measurement
-// @brief Reset the six per-path sliding-window median filter buffers.
-// @details Call after PGA460_Init() and after any recalibration to discard
-//          stale samples.  PGA460_MeasureWind() returns HAL_ERROR until at
-//          least one valid cycle has been inserted into every buffer.
-void PGA460_ResetFilter(void);
-
-// @brief Load previously calibrated path lengths from each sensor's PGA460 USER_DATA EEPROM.
-// @details Call once at boot after PGA460_Init() so prior calibrations survive power-off.
-//          Falls back to the nominal geometric path length if stored values are out of range.
-void PGA460_LoadCalibration(void);
-
-// @brief Measure the true acoustic path length for all three transducer pairs in still air.
-// @details Fires all three transmitters N_CAL times (identical to PGA460_MeasureWind), computes
-//          D_ij = c * (t_ij + t_ji) / 2 for each bidirectional pair (wind cancels in the sum),
-//          stores results in RAM and optionally in each sensor's PGA460 USER_DATA EEPROM.
-//          Must be called with no wind present (indoor bench or sealed enclosure).
-// @param soundSpeed_ms  Speed of sound in m/s from PGA460_UpdateEnvironment() (1 m/s = 1 um/us).
-// @param burnEEPROM     1 = commit calibration values to PGA460 EEPROM flash; 0 = RAM only.
-// @return HAL status.
-HAL_StatusTypeDef PGA460_CalibrateReflector(float soundSpeed_ms, uint8_t burnEEPROM);
-
-// @brief Update environmental data and recompute speed of sound.
-// @details Writes tempC, rh, hPa, and height_m into externalData and calls
-//          PGA460_ComputeSoundSpeed() to refresh externalData.SoundSpeed.
-//          Call whenever BMP581, HDC302x, or GPS data is refreshed (typically once per second).
-// @param tempC     Ambient temperature in degrees Celsius.
-// @param rh        Relative humidity in %.
-// @param hPa       Atmospheric pressure in hPa.
-// @param height_m  Altitude in metres above sea level (0 to estimate from pressure).
-void PGA460_UpdateEnvironment(float tempC, float rh, float hPa, float height_m);
-
-// @brief Perform a full 3-transmitter measurement cycle and return filtered wind vector.
-// @details Fires each transmitter in turn via TIM2 DECPL hardware timestamping (DMA),
-//          inserts the six raw one-way ToF values into per-path sliding-window buffers
-//          (N = 5), computes the median of each buffer, reconstructs the wind vector
-//          using the closed-form least-squares formula, and returns speed and direction
-//          via CORDIC MODULUS and PHASE.
-//          Returns HAL_OK when all three transmitters succeeded; HAL_ERROR when a fault
-//          occurred (the most recent valid filtered output is still written to *out).
-// @param out  Output: Speed (m/s) and Direction (degrees FROM: 0/360 = N, 90 = E, 180 = S, 270 = W).
-// @return HAL status.
-HAL_StatusTypeDef PGA460_MeasureWind(PGA460_Wind_t *out);
 
 #endif // PGA460_H
