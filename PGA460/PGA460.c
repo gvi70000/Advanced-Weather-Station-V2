@@ -77,7 +77,7 @@ extern volatile uint8_t Decpl_RDY;
 #define PGA460_TEMP_ERR	900.0f
 #define ULTRASONIC_SENSOR_COUNT	3	// Number of ultrasonic sensors in the array
 
-const PGA460_Regs_t s0 = {
+static const PGA460_Regs_t s0 = {
 		.EEData.UserData = {0}, // 0x00..0x13
 		.EEData.TVG = {
 		.TVGAIN0 = 48, .TVGAIN1 = 80, .TVGAIN2 = 0, .TVGAIN3 = 255,
@@ -115,7 +115,7 @@ const PGA460_Regs_t s0 = {
 		}
 	};
 
-const PGA460_Regs_t s1 = {
+static const PGA460_Regs_t s1 = {
 		.EEData.UserData = {0}, // 0x00..0x13
 		.EEData.TVG = {
 		.TVGAIN0 = 48, .TVGAIN1 = 80, .TVGAIN2 = 0, .TVGAIN3 = 255,
@@ -153,7 +153,7 @@ const PGA460_Regs_t s1 = {
 		}
 	};
 
-const PGA460_Regs_t s2 = {
+static const PGA460_Regs_t s2 = {
 		.EEData.UserData = {0}, // 0x00..0x13
 		.EEData.TVG = {
 		.TVGAIN0 = 48, .TVGAIN1 = 80, .TVGAIN2 = 0, .TVGAIN3 = 255,
