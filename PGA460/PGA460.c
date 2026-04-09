@@ -1228,13 +1228,8 @@ float PGA460_ReadTemperatureOrNoise(const uint8_t sensorID, const PGA460_CmdType
 #define U20_X    0.27386126465714610976890091958966f   /* (T0x - T2x) / L */
 #define U20_Y    0.47434129805077349254335479464184f   /* (T0y - T2y) / L */
 
-/*
- * Least-squares weight K = (A^T A)^{-1} scalar = 1/0.45 = 20/9
- * (A^T A is diagonal due to 120deg symmetry; both diagonal entries = 0.45)
- */
+// Least-squares weight K = (A^T A)^{-1} scalar = 1/0.45 = 20/9 (A^T A is diagonal due to 120deg symmetry; both diagonal entries = 0.45)
 #define LS_K    2.22222222222222f   /* 20/9 */
-
-
 
 /*===========================================================================
  * CORDIC CONSTANTS
@@ -1245,44 +1240,37 @@ float PGA460_ReadTemperatureOrNoise(const uint8_t sensorID, const PGA460_CmdType
  * before being written to the CORDIC (which requires inputs in [-1, 1]).
  * 100 m/s covers any meteorological condition with comfortable headroom.
  */
-#define WIND_CORDIC_SCALE   100.0f          /* m/s (= um/us)              */
-#define WIND_CORDIC_INV     0.01f           /* 1 / WIND_CORDIC_SCALE      */
+#define WIND_CORDIC_SCALE   100.0f						/* m/s (= um/us)						*/
+#define WIND_CORDIC_INV     0.01f							/* 1 / WIND_CORDIC_SCALE		*/
 
 /* Q1.31 scale factor: maps float [-1,1] to int32_t */
-#define Q31_SCALE           2147483647.0f   /* 2^31 - 1                   */
-#define Q31_INV             4.656612873e-10f /* 1 / Q31_SCALE              */
+#define Q31_SCALE           2147483647.0f			/* 2^31 - 1                 */
+#define Q31_INV             4.656612873e-10f	/* 1 / Q31_SCALE						*/
 
-/* CORDIC output for PHASE: angle/p in Q1.31 ? multiply by p to get radians */
-#define INV_Q31_TO_PI       1.46291807927e-9f  /* p / (2^31 - 1)           */
+/* CORDIC output for PHASE: angle/p in Q1.31 multiply by p to get radians	*/
+#define INV_Q31_TO_PI       1.46291807927e-9f	/* p / (2^31 - 1)           */
 
+/* CORDIC PHASE output [-1,+1] maps to [-180°,+180°]	*/
+#define CORDIC_PHASE_TO_DEG   180.0f   
+
+#define CORDIC_Q31_INV_TO_DEG   (CORDIC_PHASE_TO_DEG * Q31_INV)
 /*===========================================================================
  * CALIBRATION CONSTANTS
  *===========================================================================*/
 
-#define N_CAL               16U     /* number of sample pairs to average    */
-#define CAL_PAIR_DELAY_MS   100U    /* inter-pair delay during calibration   */
+#define N_CAL               16     /* number of sample pairs to average    */
+#define CAL_PAIR_DELAY_MS   100    /* inter-pair delay during calibration   */
 
 /*
  * USER_DATA byte offset within sensor EEPROM where D_ij is stored.
  * Bytes 0-3 of USER_DATA in the transmitting sensor = IEEE-754 float32.
  * Sensor 0 stores D01, Sensor 1 stores D12, Sensor 2 stores D20.
  */
-#define CAL_USERDATA_OFFSET 0x00U
+#define CAL_USERDATA_OFFSET 0x00
 
-/*===========================================================================
- * TIMING CONVERSION
- * TIM2 runs at 170 MHz, no prescaler ? 1 tick = 5.882... ns
- * TICK_TO_US: ticks ? us
- *===========================================================================*/
-/* TICK_TO_US already defined above */
-
-/*---------------------------------------------------------------------------
- * External ISR support function (defined in tim.c USER CODE section).
- * Atomically clears Decpl_RDY and resets the channel-done bitmask in the
- * HAL_TIM_IC_CaptureCallback before DMA channels are armed.
- *--------------------------------------------------------------------------*/
-extern void DECPL_ResetReadyFlag(void);
-
+#define TOF_MIN_TICKS	400
+#define TOF_MAX_TICKS	2000
+		
 /* Calibrated one-way path lengths in um for each transmitting sensor.
  * Index i = transmitter index.  Populated by PGA460_CalibrateReflector(). */
 static float g_pathLen_um[3] = {NOMINAL_PATH_UM, NOMINAL_PATH_UM, NOMINAL_PATH_UM};
@@ -1322,8 +1310,8 @@ static float g_pathLen_um[3] = {NOMINAL_PATH_UM, NOMINAL_PATH_UM, NOMINAL_PATH_U
  * result and convergence improves over the next N_FILT-1 calls.
  *===========================================================================*/
 
-#define N_FILT          5U      /* sliding-window depth (must be odd)         */
-#define N_FILT_HALF     2U      /* N_FILT / 2, index of median in sorted copy */
+#define N_FILT          5      /* sliding-window depth (must be odd)         */
+#define N_FILT_HALF     2      /* N_FILT / 2, index of median in sorted copy */
 
 /* Symbolic indices for the six one-way ToF paths */
 typedef enum {
@@ -1345,12 +1333,11 @@ static uint8_t g_tof_count[TOF_PATH_COUNT];           /* valid sample count   */
  * @details Resets head index and sample count to zero for every path.
  *          Call after PGA460_Init() and after any recalibration.
  */
-static void filter_reset(void)
-{
-    for (uint8_t p = 0u; p < (uint8_t)TOF_PATH_COUNT; p++) {
-        g_tof_head [p] = 0u;
-        g_tof_count[p] = 0u;
-        for (uint8_t s = 0u; s < N_FILT; s++) {
+void PGA460_ResetFilter(void) {
+    for (uint8_t p = 0; p < (uint8_t)TOF_PATH_COUNT; p++) {
+        g_tof_head [p] = 0;
+        g_tof_count[p] = 0;
+        for (uint8_t s = 0; s < N_FILT; s++) {
             g_tof_buf[p][s] = 0.0f;
         }
     }
@@ -1362,11 +1349,10 @@ static void filter_reset(void)
  * @param path  Path index (see ToFPath_t).
  * @param tof_us  One-way ToF measurement in us.
  */
-static void filter_insert(ToFPath_t path, float tof_us)
-{
+static void filter_insert(ToFPath_t path, float tof_us) {
     uint8_t h = g_tof_head[path];
     g_tof_buf[path][h] = tof_us;
-    g_tof_head[path]   = (uint8_t)((h + 1u) % N_FILT);
+    g_tof_head[path]   = (uint8_t)((h + 1) % N_FILT);
     if (g_tof_count[path] < N_FILT) {
         g_tof_count[path]++;
     }
@@ -1380,29 +1366,26 @@ static void filter_insert(ToFPath_t path, float tof_us)
  * @param path  Path index (see ToFPath_t).
  * @return Median ToF in us, or 0.0f if no samples are present.
  */
-static float filter_median(ToFPath_t path)
-{
+static float filter_median(ToFPath_t path){
     uint8_t n = g_tof_count[path];
-    if (n == 0u) { return 0.0f; }
-
+    if (n == 0) { return 0.0f; }
     /* Local copy -- do not disturb the circular buffer */
     float tmp[N_FILT];
-    for (uint8_t i = 0u; i < n; i++) {
+    for (uint8_t i = 0; i < n; i++) {
         tmp[i] = g_tof_buf[path][i];
     }
 
     /* Insertion sort (ascending) */
-    for (uint8_t i = 1u; i < n; i++) {
+    for (uint8_t i = 1; i < n; i++) {
         float   key = tmp[i];
         uint8_t j   = i;
-        while (j > 0u && tmp[j - 1u] > key) {
-            tmp[j] = tmp[j - 1u];
+        while (j > 0 && tmp[j - 1] > key) {
+            tmp[j] = tmp[j - 1];
             j--;
         }
         tmp[j] = key;
     }
-
-    return tmp[n / 2u];   /* lower-median for even n, exact median for odd n */
+    return tmp[n / 2];   /* lower-median for even n, exact median for odd n */
 }
 
 /*===========================================================================
@@ -1421,40 +1404,32 @@ static float filter_median(ToFPath_t path)
  * @param x  East wind component (m/s) -- second argument maps to CORDIC X.
  * @return Angle in degrees in [-180, +180); 0.0f for near-zero input vectors.
  */
-static float cordic_atan2_deg(float y, float x)
-{
+static float cordic_atan2_deg(float y, float x) {
     /* --- Normalise to unit circle --- */
     float abs_x = (x < 0.0f) ? -x : x;
     float abs_y = (y < 0.0f) ? -y : y;
     float norm  = (abs_x > abs_y) ? abs_x : abs_y;
-
-    if (norm < 1e-9f) {
-        return 0.0f;   /* near-zero vector: undefined direction, treat as 0 */
-    }
-
+    if (norm < 1e-9f) { return 0.0f; } /* near-zero vector: undefined direction, treat as 0 */
     float xn = x / norm;
     float yn = y / norm;
-
     /* --- Configure CORDIC: PHASE, 6 iterations (24-bit accuracy), Q1.31 --- */
     CORDIC->CSR = CORDIC_FUNCTION_PHASE
-                | CORDIC_PRECISION_6CYCLES   /* NB_ITER = 6 ? ~24 bit     */
+                | CORDIC_PRECISION_6CYCLES   /* NB_ITER = 6 ~24 bit	*/
                 | CORDIC_SCALE_0
-                | CORDIC_NBWRITE_2           /* write X then Y             */
-                | CORDIC_NBREAD_1            /* read one result            */
+                | CORDIC_NBWRITE_2           /* write X then Y			*/
+                | CORDIC_NBREAD_1            /* read one result			*/
                 | CORDIC_INSIZE_32BITS
                 | CORDIC_OUTSIZE_32BITS;
 
     /* Write X first, then Y (CORDIC HW order for PHASE) */
     CORDIC->WDATA = (int32_t)(xn * Q31_SCALE);
     CORDIC->WDATA = (int32_t)(yn * Q31_SCALE);
-
     /* Poll RRDY flag */
     while (!(CORDIC->CSR & CORDIC_CSR_RRDY)) {}
-
     int32_t raw = (int32_t)CORDIC->RDATA;  /* angle / p in Q1.31 */
 
     /* Convert: raw * (p / (2^31-1)) * (180/p) = raw * (180 / (2^31-1)) */
-    return (float)raw * (180.0f * Q31_INV);
+    return (float)raw * CORDIC_Q31_INV_TO_DEG;
 }
 
 /**
@@ -1466,19 +1441,13 @@ static float cordic_atan2_deg(float y, float x)
  * @param y  North wind component (m/s).
  * @return Euclidean magnitude in the same units as the inputs; 0.0f for near-zero vectors.
  */
-static float cordic_magnitude(float x, float y)
-{
+static float cordic_magnitude(float x, float y) {
     float abs_x = (x < 0.0f) ? -x : x;
     float abs_y = (y < 0.0f) ? -y : y;
     float norm  = (abs_x > abs_y) ? abs_x : abs_y;
-
-    if (norm < 1e-9f) {
-        return 0.0f;
-    }
-
+    if (norm < 1e-9f) { return 0.0f; }
     float xn = x / norm;
     float yn = y / norm;
-
     /* --- Configure CORDIC: MODULUS, 6 iterations, Q1.31 --- */
     CORDIC->CSR = CORDIC_FUNCTION_MODULUS
                 | CORDIC_PRECISION_6CYCLES
@@ -1507,8 +1476,7 @@ static float cordic_magnitude(float x, float y)
  * @param timeout_ms  Maximum wait time in milliseconds.
  * @return HAL_OK when Decpl_RDY goes high; HAL_TIMEOUT if the deadline expires.
  */
-static HAL_StatusTypeDef wait_decpl_ready(uint32_t timeout_ms)
-{
+static HAL_StatusTypeDef wait_decpl_ready(uint32_t timeout_ms) {
     uint32_t t0 = HAL_GetTick();
     while (!Decpl_RDY) {
         if ((HAL_GetTick() - t0) >= timeout_ms) {
@@ -1521,12 +1489,10 @@ static HAL_StatusTypeDef wait_decpl_ready(uint32_t timeout_ms)
 /**
  * @brief Fire one transmitter and capture echo timestamps on both receivers via TIM2 DMA.
  * @details Sequence:
- *            1. Reset Decpl_RDY and zero ToF_Result[] via DECPL_ResetReadyFlag().
+ *            1. Reset Decpl_RDY and zero ToF_Result[].
  *            2. Arm TIM2 input-capture DMA on CH1/2/3 for 2 edges each.
- *            3. Send BROADCAST_LISTEN_ONLY_P2 -- all DECPL pins assert immediately
- *               (P2 = 0 pulses); DMA captures this as E0 (reference, discarded).
- *            4. Send BURST_AND_LISTEN_PRESET1 on the transmitter -- 6 pulses fired;
- *               Tx DECPL asserts at burst end -> E1[tx] = T_burst reference.
+ *            3. Send BROADCAST_LISTEN_ONLY_P2 -- all DECPL pins assert immediately(P2 = 0 pulses); DMA captures this as E0 (reference, discarded).
+ *            4. Send BURST_AND_LISTEN_PRESET1 on the transmitter -- 6 pulses fired; Tx DECPL asserts at burst end -> E1[tx] = T_burst reference.
  *            5. Wait for all three DMA TCs via wait_decpl_ready() (10 ms timeout).
  *            6. Compute ToF = TICK_TO_US(E1[rx] - E1[tx]) for each receiver.
  *            7. Validate: delta ticks must be in [TOF_MIN_TICKS, TOF_MAX_TICKS].
@@ -1537,8 +1503,8 @@ static HAL_StatusTypeDef wait_decpl_ready(uint32_t timeout_ms)
  * @return HAL_OK, HAL_ERROR (invalid ToF), or HAL_TIMEOUT (no DECPL response).
  */
 static HAL_StatusTypeDef run_one_measurement(uint8_t tx, float  *tof_rx1_us, float  *tof_rx2_us) {
-    uint8_t rx1 = (tx == 0u) ? 1u : 0u;
-    uint8_t rx2 = (uint8_t)(3u - tx - rx1);
+    uint8_t rx1 = (tx == 0) ? 1 : 0;
+    uint8_t rx2 = (uint8_t)(3 - tx - rx1);
     /*
      * Reset state BEFORE arming DMA.
      * DECPL_ResetReadyFlag() disables interrupts briefly to prevent a stale
@@ -1548,7 +1514,7 @@ static HAL_StatusTypeDef run_one_measurement(uint8_t tx, float  *tof_rx1_us, flo
      * the explicit flag reset here is sufficient - the bitmask itself is reset
      * inside the callback when the mask completes.
      */
-    DECPL_ResetReadyFlag();
+    Decpl_RDY = 0;
     memset((void *)ToF_Result, 0, sizeof(ToF_Result));
     /* --- Arm TIM2 input-capture DMA: 2 edges per DECPL transducer --- */
     HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_1, (uint32_t *)&ToF_Result[0].E0, 2u);
@@ -1569,10 +1535,10 @@ static HAL_StatusTypeDef run_one_measurement(uint8_t tx, float  *tof_rx1_us, flo
      *    The two receivers listen; when each detects its echo threshold
      *    crossing, its DECPL asserts ? captured as ToF_Result[rx].E1.
      */
-    PGA460_UltrasonicCmd(rx1, PGA460_CMD_BROADCAST_LISTEN_ONLY_P2, 1u);
-    PGA460_UltrasonicCmd(tx,  PGA460_CMD_BURST_AND_LISTEN_PRESET1, 1u);
+    PGA460_UltrasonicCmd(rx1, PGA460_CMD_BROADCAST_LISTEN_ONLY_P2, 1);
+    PGA460_UltrasonicCmd(tx,  PGA460_CMD_BURST_AND_LISTEN_PRESET1, 1);
     /* --- Wait for all three DECPL TC interrupts via bitmask callback --- */
-    if (wait_decpl_ready(10u) != HAL_OK) {
+    if (wait_decpl_ready(10) != HAL_OK) {
         HAL_TIM_IC_Stop_DMA(&htim2, TIM_CHANNEL_1);
         HAL_TIM_IC_Stop_DMA(&htim2, TIM_CHANNEL_2);
         HAL_TIM_IC_Stop_DMA(&htim2, TIM_CHANNEL_3);
@@ -1595,13 +1561,6 @@ static HAL_StatusTypeDef run_one_measurement(uint8_t tx, float  *tof_rx1_us, flo
     uint32_t t_echo2  = ToF_Result[rx2].E1;
     uint32_t delta1 = t_echo1 - t_burst;   /* unsigned wrap-safe subtraction */
     uint32_t delta2 = t_echo2 - t_burst;
-    /* Sanity: echo must arrive after burst, within the physical window.
-     * TOF_MIN_TICKS = 400 us * 170 = 68,000
-     * TOF_MAX_TICKS = 2000 us * 170 = 340,000
-     * (Physical range for 316 mm path: ~864-1033 us, guards are generous.) */
-    #define TOF_MIN_TICKS	400
-    #define TOF_MAX_TICKS	2000
-
     if (delta1 < TOF_MIN_TICKS || delta1 > TOF_MAX_TICKS || delta2 < TOF_MIN_TICKS || delta2 > TOF_MAX_TICKS) {
         DEBUG("Tx%u: ToF ticks out of range (d1=%d, d2=%d) - expected %d..%d\n", tx, delta1, delta2, TOF_MIN_TICKS, TOF_MAX_TICKS);
         return HAL_ERROR;
@@ -1621,8 +1580,8 @@ static HAL_StatusTypeDef run_one_measurement(uint8_t tx, float  *tof_rx1_us, flo
  */
 static HAL_StatusTypeDef store_path_to_eeprom(uint8_t sensorID, float path_um) {
     uint8_t bytes[4];
-    memcpy(bytes, &path_um, 4u);
-    for (uint8_t i = 0u; i < 4u; i++) {
+    memcpy(bytes, &path_um, 4);
+    for (uint8_t i = 0u; i < 4; i++) {
         if (PGA460_RegisterWrite(sensorID, (uint8_t)(REG_USER_DATA1 + i), bytes[i]) != HAL_OK) {
             DEBUG("Sensor %u: failed to write calibration byte %u\n", sensorID, i);
             return HAL_ERROR;
@@ -1640,9 +1599,9 @@ static HAL_StatusTypeDef store_path_to_eeprom(uint8_t sensorID, float path_um) {
  * @return Calibrated path length in um, or NOMINAL_PATH_UM if not stored or invalid.
  */
 static float load_path_from_eeprom(uint8_t sensorID) {
-    uint8_t bytes[4] = {0u, 0u, 0u, 0u};
+    uint8_t bytes[4] = {0, 0, 0, 0};
     uint8_t val;
-    for (uint8_t i = 0u; i < 4u; i++) {
+    for (uint8_t i = 0u; i < 4; i++) {
         if (PGA460_RegisterRead(sensorID, (uint8_t)(REG_USER_DATA1 + i), &val) != HAL_OK) {
             DEBUG("Sensor %u: failed to read calibration byte %u\n", sensorID, i);
             return NOMINAL_PATH_UM;
@@ -1650,7 +1609,7 @@ static float load_path_from_eeprom(uint8_t sensorID) {
         bytes[i] = val;
     }
     float result;
-    memcpy(&result, bytes, 4u);
+    memcpy(&result, bytes, 4);
     /* Sanity check: must be within *10% of nominal */
     if (result < NOMINAL_PATH_UM * 0.90f || result > NOMINAL_PATH_UM * 1.10f) {
         DEBUG("Sensor %u: EEPROM path length %.1f um out of range, using nominal\n",
@@ -1661,17 +1620,6 @@ static float load_path_from_eeprom(uint8_t sensorID) {
 }
 
 /**
- * @brief PGA460_ResetFilter function implementation.
- * @details Calls filter_reset() to zero all six ToF circular buffers.
- *          Call after PGA460_Init() and after any recalibration to discard
- *          pre-calibration samples before starting wind measurements.
- */
-void PGA460_ResetFilter(void)
-{
-    filter_reset();
-}
-
-/**
  * @brief PGA460_LoadCalibration function implementation.
  * @details Calls load_path_from_eeprom() for each of the three sensors and stores the
  *          result in g_pathLen_um[].  Falls back to NOMINAL_PATH_UM on failure.
@@ -1679,7 +1627,7 @@ void PGA460_ResetFilter(void)
  */
 void PGA460_LoadCalibration(void)
 {
-    for (uint8_t i = 0u; i < 3u; i++) {
+    for (uint8_t i = 0; i < 3; i++) {
         g_pathLen_um[i] = load_path_from_eeprom(i);
         DEBUG("Sensor %u: loaded D = %.2f um\n", i, g_pathLen_um[i]);
     }
@@ -1715,27 +1663,26 @@ HAL_StatusTypeDef PGA460_CalibrateReflector(float soundSpeed_ms, uint8_t burnEEP
      *   sum[2][0] = S t_20,  sum[2][1] = S t_21
      */
     float   sum[3][2] = {{0.0f}};
-    uint8_t valid     = 0u;
-    for (uint8_t n = 0u; n < N_CAL; n++) {
+    uint8_t valid = 0;
+    for (uint8_t n = 0; n < N_CAL; n++) {
         float tof[3][2] = {{0.0f}};
-        uint8_t all_ok  = 1u;
+        uint8_t all_ok = 1;
         /* Fire each transmitter and capture both receiver ToFs */
-        for (uint8_t tx = 0u; tx < 3u; tx++) {
+        for (uint8_t tx = 0; tx < 3; tx++) {
             if (run_one_measurement(tx, &tof[tx][0], &tof[tx][1]) != HAL_OK) {
                 all_ok = 0u;
                 break;
             }
             /* Validate: expected range for 316 mm path at 306-496 m/s */
-            if (tof[tx][0] < 400.0f || tof[tx][0] > 2000.0f ||
-                tof[tx][1] < 400.0f || tof[tx][1] > 2000.0f) {
+            if (tof[tx][0] < TOF_MIN_TICKS || tof[tx][0] > TOF_MAX_TICKS || tof[tx][1] < TOF_MIN_TICKS || tof[tx][1] > TOF_MAX_TICKS) {
                 DEBUG("Cal n=%u Tx%u: ToF out of range (%.1f, %.1f us)\n",
                       n, tx, tof[tx][0], tof[tx][1]);
-                all_ok = 0u;
+                all_ok = 0;
                 break;
             }
         }
         if (all_ok) {
-            for (uint8_t tx = 0u; tx < 3u; tx++) {
+            for (uint8_t tx = 0; tx < 3; tx++) {
                 sum[tx][0] += tof[tx][0];
                 sum[tx][1] += tof[tx][1];
             }
@@ -1743,7 +1690,7 @@ HAL_StatusTypeDef PGA460_CalibrateReflector(float soundSpeed_ms, uint8_t burnEEP
         }
         HAL_Delay(CAL_PAIR_DELAY_MS);
     }
-    if (valid < (N_CAL / 2u)) {
+    if (valid < (N_CAL / 2)) {
         DEBUG("Calibration failed: only %u/%u valid cycles\n", valid, N_CAL);
         return HAL_ERROR;
     }
@@ -1764,9 +1711,9 @@ HAL_StatusTypeDef PGA460_CalibrateReflector(float soundSpeed_ms, uint8_t burnEEP
     d[0] = c * t_avg_01;   /* D_01 um, owned by sensor 0 */
     d[1] = c * t_avg_12;   /* D_12 um, owned by sensor 1 */
     d[2] = c * t_avg_20;   /* D_20 um, owned by sensor 2 */
-    for (uint8_t i = 0u; i < 3u; i++) {
+    for (uint8_t i = 0; i < 3; i++) {
         g_pathLen_um[i] = d[i];
-        DEBUG("D_%u%u = %.2f um  (%.4f mm, nominal %.2f um, delta %+.1f um, %u samples)\n", i, (i + 1u) % 3u, d[i], d[i] * 0.001f, NOMINAL_PATH_UM, d[i] - NOMINAL_PATH_UM, valid);
+        DEBUG("D_%u%u = %.2f um  (%.4f mm, nominal %.2f um, delta %+.1f um, %u samples)\n", i, (i + 1) % 3, d[i], d[i] * 0.001f, NOMINAL_PATH_UM, d[i] - NOMINAL_PATH_UM, valid);
         if (store_path_to_eeprom(i, d[i]) != HAL_OK) {
             return HAL_ERROR;
         }
@@ -1775,7 +1722,7 @@ HAL_StatusTypeDef PGA460_CalibrateReflector(float soundSpeed_ms, uint8_t burnEEP
                 DEBUG("Sensor %u: EEPROM burn failed\n", i);
                 return HAL_ERROR;
             }
-            HAL_Delay(50u);   /* PGA460 internal EEPROM write cycle */
+            HAL_Delay(50);   /* PGA460 internal EEPROM write cycle */
         }
     }
     DEBUG("Calibration complete (%u/%u cycles used)\n", valid, N_CAL);
