@@ -71,17 +71,24 @@ HAL_StatusTypeDef TSL25911_Init(void) {
     if (TSL25911_Enable(TSL25911_STATE_PON) != HAL_OK) {
         return HAL_ERROR; // Failed to set PON
     }
-
+		HAL_Delay(10);  // Wait for oscillator stabilization
+		
     // Step 3: Configure gain and integration time
     if (TSL25911_SetGainAndIntegrationTime(TSL25911_GAIN_LOW, TSL25911_INTEGRATION_600MS) != HAL_OK) {
         return HAL_ERROR; // Failed to set gain and integration time
     }
 
+		
     // Step 5: Configure ALS interrupt thresholds
     if (TSL25911_SetInterruptThresholds(TSL25911_SET_MID, TSL25911_SET_MID) != HAL_OK) {
         return HAL_ERROR; // Failed to set interrupt thresholds
     }
 
+
+    if (TSL25911_SetPersistence(TSL25911_PERSIST_2_CYCLES) != HAL_OK) {
+        return HAL_ERROR;
+    }
+		
     // Step 6: Enable ALS and ALS interrupts
 		TSL25911_Sensor.ENABLE.Val.Value = TSL25911_STATE_PON_AEN_AIEN;
 //		TSL25911_Sensor.ENABLE.Val.BitField.PON = 1; // Power ON
