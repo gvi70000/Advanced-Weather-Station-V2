@@ -257,11 +257,11 @@ HAL_StatusTypeDef ENS160_Init(void) {
 
     // Step 6: Configure interrupt pin — all interrupts disabled, pure polling mode.
     // Remove or update these lines if interrupt-driven data ready is implemented.
-    ens160_regs.CONFIG.Val.BitField.INTEN     = 0;  // INTn pin disabled
-    ens160_regs.CONFIG.Val.BitField.INTDAT    = 0;  // No assertion on DATA update
-    ens160_regs.CONFIG.Val.BitField.INTGPR    = 0;  // No assertion on GPR update
-    ens160_regs.CONFIG.Val.BitField.INT_CFG   = 0;  // Open-drain (irrelevant when disabled)
-    ens160_regs.CONFIG.Val.BitField.INTPOL    = 0;  // Active low (irrelevant when disabled)
+    ens160_regs.CONFIG.Val.BitField.INTEN     = 1;  // INTn pin is enabled for the functions below
+    ens160_regs.CONFIG.Val.BitField.INTDAT    = 1;  // INTn pin asserted when new data is presented in the DATA_XXX Registers
+    ens160_regs.CONFIG.Val.BitField.INTGPR    = 0;  // INTn pin asserted when new data is presented in the General Purpose Read Registers
+    ens160_regs.CONFIG.Val.BitField.INT_CFG   = 1;  // 0: Open drain 1: Push / Pull
+    ens160_regs.CONFIG.Val.BitField.INTPOL    = 0;  // 0: Active low (Default) 1: Active high
     if (ENS160_SetConfig() != HAL_OK) return HAL_ERROR;
 
     // Step 7: Set default environmental compensation
