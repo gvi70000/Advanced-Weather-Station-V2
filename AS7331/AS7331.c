@@ -130,7 +130,7 @@ HAL_StatusTypeDef AS7331_StartStopMeasurement(AS7331_SS_t ss) {
  * @return HAL_OK if DEVID matches, HAL_ERROR on I2C failure or ID mismatch.
  */
 HAL_StatusTypeDef AS7331_VerifyDeviceID(void) {
-    if (AS7331_ReadRegs(AS7331_REG_AGEN, &as7331_cfg.AGEN.Val.Value, 1) != HAL_OK) {
+    if (AS7331_ReadRegs(AS7331_REG_AGEN, (uint8_t *)&as7331_cfg.AGEN.Val.Value, 1) != HAL_OK) {
         return HAL_ERROR;
     }
     return (as7331_cfg.AGEN.Val.BitField.DEVID == AS7331_DEVID) ? HAL_OK : HAL_ERROR;
@@ -385,7 +385,7 @@ HAL_StatusTypeDef AS7331_ReadUVData(AS7331_DataOut_t *uvData) {
  *          2.  Power on — clear OSR:PD, wait 2 ms (TSTARTPD).
  *          3.  Enter Configuration state (OSR:DOS = 010b).
  *          4.  Verify device ID from AGEN register (DEVID must equal AS7331_DEVID).
- *          5.  Set integration time (1024 ms) and gain (1x).
+ *          5.  Set integration time (2048 ms) and gain (1x).
  *          6.  Set measurement mode to continuous (CONT).
  *          7.  Set READY pin to push-pull output.
  *          8.  Set internal clock to 1 MHz.
@@ -411,7 +411,7 @@ HAL_StatusTypeDef AS7331_Init(void) {
     if (AS7331_VerifyDeviceID() != HAL_OK) return HAL_ERROR;
 
     // Step 5: Configure integration time and gain
-    if (AS7331_SetIntegrationTime(AS7331_TIME_1024MS) != HAL_OK) return HAL_ERROR;
+    if (AS7331_SetIntegrationTime(AS7331_TIME_2048MS) != HAL_OK) return HAL_ERROR;
     if (AS7331_SetGain(AS7331_GAIN_1X)                != HAL_OK) return HAL_ERROR;
 
     // Step 6: Set continuous measurement mode
