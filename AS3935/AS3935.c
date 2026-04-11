@@ -52,8 +52,7 @@ extern TIM_HandleTypeDef htim2;
  * @param  len   Number of bytes to write.
  * @return HAL status.
  */
-static HAL_StatusTypeDef AS3935_WriteReg(uint8_t reg, volatile uint8_t *pData, uint8_t len)
-{
+static HAL_StatusTypeDef AS3935_WriteReg(uint8_t reg, volatile uint8_t *pData, uint8_t len) {
     return HAL_I2C_Mem_Write(&hi2c1,
                              AS3935_I2C_ADDRESS,
                              reg,
@@ -70,8 +69,7 @@ static HAL_StatusTypeDef AS3935_WriteReg(uint8_t reg, volatile uint8_t *pData, u
  * @param  len   Number of bytes to read.
  * @return HAL status.
  */
-static HAL_StatusTypeDef AS3935_ReadRegs(uint8_t reg, volatile uint8_t *pData, uint8_t len)
-{
+static HAL_StatusTypeDef AS3935_ReadRegs(uint8_t reg, volatile uint8_t *pData, uint8_t len) {
     return HAL_I2C_Mem_Read(&hi2c1,
                             AS3935_I2C_ADDRESS,
                             reg,
@@ -88,8 +86,7 @@ static HAL_StatusTypeDef AS3935_ReadRegs(uint8_t reg, volatile uint8_t *pData, u
  * @param  cmdReg AS3935_REG_PRESET_DEFAULT or AS3935_REG_CALIB_RCO.
  * @return HAL status.
  */
-static HAL_StatusTypeDef AS3935_SendDirectCommand(uint8_t cmdReg)
-{
+static HAL_StatusTypeDef AS3935_SendDirectCommand(uint8_t cmdReg) {
     uint8_t cmd = AS3935_DIRECT_COMMAND; /* 0x96 — must be a real variable,
                                             not a cast-from-integer pointer */
     return AS3935_WriteReg(cmdReg, &cmd, 1);
@@ -98,8 +95,7 @@ static HAL_StatusTypeDef AS3935_SendDirectCommand(uint8_t cmdReg)
 /**
  * @brief  Return the TIM2 tick frequency in Hz (accounts for APB prescaler).
  */
-static uint32_t AS3935_GetTimerClockHz(void)
-{
+static uint32_t AS3935_GetTimerClockHz(void) {
     uint32_t pclk1 = HAL_RCC_GetPCLK1Freq();
     /* If APB1 prescaler ≠ /1 the timer clock is doubled (RM0440 §6.2). */
     if ((RCC->CFGR & RCC_CFGR_PPRE1) != RCC_CFGR_PPRE1_DIV1)
@@ -124,8 +120,7 @@ static uint32_t AS3935_GetTimerClockHz(void)
  *
  * @return Measured frequency in Hz, or 0 if capture timed out.
  */
-static uint32_t AS3935_MeasureFrequencyHz(void)
-{
+static uint32_t AS3935_MeasureFrequencyHz(void) {
     /* timerClock is already divided by prescaler in GetTimerClockHz(),
      * but that function returns the pre-prescaler value — divide here. */
     const uint32_t timerClock = AS3935_GetTimerClockHz() /
@@ -195,8 +190,7 @@ static uint32_t AS3935_MeasureFrequencyHz(void)
  *          8.  Verify TRCO and SRCO calibration status registers.
  * @return HAL_OK on success, HAL_ERROR on any I2C failure or calib failure.
  */
-HAL_StatusTypeDef AS3935_Init(void)
-{
+HAL_StatusTypeDef AS3935_Init(void) {
     /* Step 1 — Reset all registers to datasheet defaults. */
     if (AS3935_SendDirectCommand(AS3935_REG_PRESET_DEFAULT) != HAL_OK)
         return HAL_ERROR;
@@ -288,8 +282,7 @@ HAL_StatusTypeDef AS3935_Init(void)
  * @brief  Read all AS3935 registers into the shadow structure and log them.
  * @return HAL_OK on success, HAL_ERROR on any I2C failure.
  */
-HAL_StatusTypeDef AS3935_ReadAllRegisters(void)
-{
+HAL_StatusTypeDef AS3935_ReadAllRegisters(void) {
     /* Read contiguous block 0x00–0x08 (9 bytes) individually to avoid
      * mapping gaps (energy/distance are read-only and not in the shadow). */
     uint8_t raw[9];
@@ -328,48 +321,42 @@ HAL_StatusTypeDef AS3935_ReadAllRegisters(void)
  * ---------------------------------------------------------------------- */
 
 /** @brief Set sensor power state (AS3935_POWER_UP / AS3935_POWER_DOWN). */
-HAL_StatusTypeDef AS3935_SetPower(AS3935_PowerState_t powerState)
-{
+HAL_StatusTypeDef AS3935_SetPower(AS3935_PowerState_t powerState) {
     AS3935_Sensor.POWER.Val.BitField.PWD = powerState;
     return AS3935_WriteReg(AS3935_REG_AFE_GAIN,
                            (uint8_t *)&AS3935_Sensor.POWER.Val.Value, 1);
 }
 
 /** @brief Set AFE gain (AS3935_AFE_GAIN_INDOOR / AS3935_AFE_GAIN_OUTDOOR). */
-HAL_StatusTypeDef AS3935_SetGain(AS3935_AFE_Gain_t gain)
-{
+HAL_StatusTypeDef AS3935_SetGain(AS3935_AFE_Gain_t gain) {
     AS3935_Sensor.POWER.Val.BitField.AFE_GB = gain;
     return AS3935_WriteReg(AS3935_REG_AFE_GAIN,
                            (uint8_t *)&AS3935_Sensor.POWER.Val.Value, 1);
 }
 
 /** @brief Set watchdog threshold (AS3935_WDTH_0 … AS3935_WDTH_10). */
-HAL_StatusTypeDef AS3935_SetWatchdog(AS3935_WDTH_t watchdogThreshold)
-{
+HAL_StatusTypeDef AS3935_SetWatchdog(AS3935_WDTH_t watchdogThreshold) {
     AS3935_Sensor.NOISE.Val.BitField.WDTH = watchdogThreshold;
     return AS3935_WriteReg(AS3935_REG_THRESHOLD,
                            (uint8_t *)&AS3935_Sensor.NOISE.Val.Value, 1);
 }
 
 /** @brief Set noise floor level (AS3935_NF_390uVrms … AS3935_NF_2000uVrms). */
-HAL_StatusTypeDef AS3935_SetNoiseFloor(AS3935_NoiseFloorLevel_t noiseLevel)
-{
+HAL_StatusTypeDef AS3935_SetNoiseFloor(AS3935_NoiseFloorLevel_t noiseLevel) {
     AS3935_Sensor.NOISE.Val.BitField.NF_LEV = noiseLevel;
     return AS3935_WriteReg(AS3935_REG_THRESHOLD,
                            (uint8_t *)&AS3935_Sensor.NOISE.Val.Value, 1);
 }
 
 /** @brief Set spike rejection level (AS3935_SREJ_0 … AS3935_SREJ_11). */
-HAL_StatusTypeDef AS3935_SetSpikeRejection(AS3935_SREJ_t spikeRejectionLevel)
-{
+HAL_StatusTypeDef AS3935_SetSpikeRejection(AS3935_SREJ_t spikeRejectionLevel) {
     AS3935_Sensor.STATISTICS.Val.BitField.SREJ = spikeRejectionLevel;
     return AS3935_WriteReg(AS3935_REG_LIGHTNING,
                            (uint8_t *)&AS3935_Sensor.STATISTICS.Val.Value, 1);
 }
 
 /** @brief Set minimum lightning events before INT_L fires. */
-HAL_StatusTypeDef AS3935_SetMinLightning(AS3935_MinLightning_t minEvents)
-{
+HAL_StatusTypeDef AS3935_SetMinLightning(AS3935_MinLightning_t minEvents) {
     AS3935_Sensor.STATISTICS.Val.BitField.MIN_NUM_LIGH = minEvents;
     return AS3935_WriteReg(AS3935_REG_LIGHTNING,
                            (uint8_t *)&AS3935_Sensor.STATISTICS.Val.Value, 1);
@@ -380,8 +367,7 @@ HAL_StatusTypeDef AS3935_SetMinLightning(AS3935_MinLightning_t minEvents)
  * @details Datasheet: toggle CL_STAT bit high→low (write 1 then 0).
  *          The shadow reserved bit [7] is always kept at 1.
  */
-HAL_StatusTypeDef AS3935_ClearStatistics(void)
-{
+HAL_StatusTypeDef AS3935_ClearStatistics(void) {
     AS3935_Sensor.STATISTICS.Val.BitField.CL_STAT = 1U;
     if (AS3935_WriteReg(AS3935_REG_LIGHTNING,
                         (uint8_t *)&AS3935_Sensor.STATISTICS.Val.Value, 1) != HAL_OK)
@@ -393,8 +379,7 @@ HAL_StatusTypeDef AS3935_ClearStatistics(void)
 }
 
 /** @brief Enable or disable disturber masking on IRQ. */
-HAL_StatusTypeDef AS3935_SetDisturberMask(AS3935_MaskDist_t maskDist)
-{
+HAL_StatusTypeDef AS3935_SetDisturberMask(AS3935_MaskDist_t maskDist) {
     AS3935_Sensor.INT_FREQ.Val.BitField.MASK_DIST = maskDist;
     /* Write only the upper byte — keep INT [3:0] zero. */
     uint8_t val = AS3935_Sensor.INT_FREQ.Val.Value & 0xF0U;
@@ -402,16 +387,14 @@ HAL_StatusTypeDef AS3935_SetDisturberMask(AS3935_MaskDist_t maskDist)
 }
 
 /** @brief Set LCO frequency division ratio for antenna tuning output. */
-HAL_StatusTypeDef AS3935_SetFrequencyDivisionRatio(AS3935_LCO_FDiv_t fdivRatio)
-{
+HAL_StatusTypeDef AS3935_SetFrequencyDivisionRatio(AS3935_LCO_FDiv_t fdivRatio) {
     AS3935_Sensor.INT_FREQ.Val.BitField.LCO_FDIV = fdivRatio;
     uint8_t val = AS3935_Sensor.INT_FREQ.Val.Value & 0xF0U;
     return AS3935_WriteReg(AS3935_REG_INT_MASK_ANT, &val, 1);
 }
 
 /** @brief Set internal tuning capacitor value. */
-HAL_StatusTypeDef AS3935_SetTuningCapacitor(AS3935_TuneCap_t tuningCap)
-{
+HAL_StatusTypeDef AS3935_SetTuningCapacitor(AS3935_TuneCap_t tuningCap) {
     AS3935_Sensor.IRQ.Val.BitField.TUN_CAP = tuningCap;
     return AS3935_WriteReg(AS3935_REG_FREQ_DISP_IRQ,
                            (uint8_t *)&AS3935_Sensor.IRQ.Val.Value, 1);
@@ -422,8 +405,7 @@ HAL_StatusTypeDef AS3935_SetTuningCapacitor(AS3935_TuneCap_t tuningCap)
  * @param  oscDisplay  AS3935_OSC_NONE / AS3935_OSC_TRCO / AS3935_OSC_SRCO /
  *                     AS3935_OSC_LCO.
  */
-HAL_StatusTypeDef AS3935_SetOscillatorDisplay(AS3935_OSCDisplay_t oscDisplay)
-{
+HAL_StatusTypeDef AS3935_SetOscillatorDisplay(AS3935_OSCDisplay_t oscDisplay) {
     AS3935_Sensor.IRQ.Val.BitField.OSC_DISP = oscDisplay;
     return AS3935_WriteReg(AS3935_REG_FREQ_DISP_IRQ,
                            (uint8_t *)&AS3935_Sensor.IRQ.Val.Value, 1);
@@ -439,12 +421,10 @@ HAL_StatusTypeDef AS3935_SetOscillatorDisplay(AS3935_OSCDisplay_t oscDisplay)
  *          Reading REG0x03 clears the IRQ pin.
  * @return AS3935_INT_L / AS3935_INT_D / AS3935_INT_NH / AS3935_INT_NONE.
  */
-AS3935_INT_t AS3935_GetInterruptType(void)
-{
+AS3935_INT_t AS3935_GetInterruptType(void) {
     HAL_Delay(AS3935_IRQ_DELAY_MS); /* wait ≥ 2 ms per datasheet */
 
-    if (AS3935_ReadRegs(AS3935_REG_INT_MASK_ANT,
-                        &AS3935_Sensor.INT_FREQ.Val.Value, 1) != HAL_OK) {
+    if (AS3935_ReadRegs(AS3935_REG_INT_MASK_ANT, &AS3935_Sensor.INT_FREQ.Val.Value, 1) != HAL_OK) {
         DEBUG("AS3935: Failed to read INT register\n");
         return AS3935_INT_NONE;
     }
@@ -455,9 +435,7 @@ AS3935_INT_t AS3935_GetInterruptType(void)
         case AS3935_INT_L:    DEBUG("AS3935: INT_L — lightning\n");       break;
         case AS3935_INT_D:    DEBUG("AS3935: INT_D — disturber\n");       break;
         case AS3935_INT_NH:   DEBUG("AS3935: INT_NH — noise too high\n"); break;
-        case AS3935_INT_NONE: DEBUG("AS3935: INT_NONE\n");                break;
-        default:              DEBUG("AS3935: INT unknown 0x%02X\n",
-                                    irqType);                              break;
+        default: DEBUG("AS3935: INT unknown 0x%02X\n", irqType);          break; //AS3935_INT_NONE
     }
 
     return irqType;
@@ -473,24 +451,19 @@ AS3935_INT_t AS3935_GetInterruptType(void)
  * @param  data  Pointer to caller-allocated AS3935_LightningData_t.
  * @return HAL_OK, or HAL_ERROR on I2C failure.
  */
-HAL_StatusTypeDef AS3935_ReadLightningData(AS3935_LightningData_t *data)
-{
+HAL_StatusTypeDef AS3935_ReadLightningData(AS3935_LightningData_t *data) {
     uint8_t raw[4];
 
     if (AS3935_ReadRegs(AS3935_REG_ENERGY_LSB, raw, 4) != HAL_OK)
         return HAL_ERROR;
 
     /* REG0x04 = LSB, REG0x05 = MSB, REG0x06[4:0] = MMSB */
-    data->LightningEnergy = (uint32_t)raw[0]
-                          | ((uint32_t)raw[1] << 8)
-                          | ((uint32_t)(raw[2] & 0x1FU) << 16);
+    data->LightningEnergy = (uint32_t)raw[0] | ((uint32_t)raw[1] << 8) | ((uint32_t)(raw[2] & 0x1FU) << 16);
 
     /* REG0x07[5:0] = distance estimation */
     data->DistanceEstimation = raw[3] & 0x3FU;
 
-    DEBUG("AS3935: Energy=%lu  Distance=0x%02X\n",
-          (unsigned long)data->LightningEnergy,
-          data->DistanceEstimation);
+    DEBUG("AS3935: Energy=%lu  Distance=0x%02X\n", (unsigned long)data->LightningEnergy, data->DistanceEstimation);
 
     return HAL_OK;
 }
@@ -500,17 +473,13 @@ HAL_StatusTypeDef AS3935_ReadLightningData(AS3935_LightningData_t *data)
  * ---------------------------------------------------------------------- */
 
 /** @brief Refresh TRCO calibration status in shadow. */
-HAL_StatusTypeDef AS3935_ReadTRCOCalibStatus(void)
-{
-    return AS3935_ReadRegs(AS3935_REG_CALIB_TRCO,
-                           &AS3935_Sensor.TRCO.Val.Value, 1);
+HAL_StatusTypeDef AS3935_ReadTRCOCalibStatus(void) {
+    return AS3935_ReadRegs(AS3935_REG_CALIB_TRCO, &AS3935_Sensor.TRCO.Val.Value, 1);
 }
 
 /** @brief Refresh SRCO calibration status in shadow. */
-HAL_StatusTypeDef AS3935_ReadSRCOCalibStatus(void)
-{
-    return AS3935_ReadRegs(AS3935_REG_CALIB_SRCO,
-                           &AS3935_Sensor.SRCO.Val.Value, 1);
+HAL_StatusTypeDef AS3935_ReadSRCOCalibStatus(void) {
+    return AS3935_ReadRegs(AS3935_REG_CALIB_SRCO, &AS3935_Sensor.SRCO.Val.Value, 1);
 }
 
 /* -------------------------------------------------------------------------
@@ -522,8 +491,7 @@ HAL_StatusTypeDef AS3935_ReadSRCOCalibStatus(void)
  * @param  profile  One of the AS3935_Profile_t values.
  * @return HAL_OK, or HAL_ERROR if the profile index is unknown.
  */
-HAL_StatusTypeDef AS3935_ApplySensitivityProfile(AS3935_Profile_t profile)
-{
+HAL_StatusTypeDef AS3935_ApplySensitivityProfile(AS3935_Profile_t profile) {
     typedef struct {
         AS3935_AFE_Gain_t        gain;
         AS3935_NoiseFloorLevel_t nf;
@@ -532,16 +500,16 @@ HAL_StatusTypeDef AS3935_ApplySensitivityProfile(AS3935_Profile_t profile)
     } ProfileEntry_t;
 
     static const ProfileEntry_t profiles[] = {
-        /* INDOOR_VERY_SENSITIVE     */ { AS3935_AFE_GAIN_INDOOR,  AS3935_NF_860uVrms,  AS3935_WDTH_2, AS3935_SREJ_2  },
-        /* INDOOR_BALANCED_1         */ { AS3935_AFE_GAIN_INDOOR,  AS3935_NF_1100uVrms, AS3935_WDTH_2, AS3935_SREJ_2  },
-        /* INDOOR_BALANCED_2         */ { AS3935_AFE_GAIN_INDOOR,  AS3935_NF_1800uVrms, AS3935_WDTH_2, AS3935_SREJ_3  },
-        /* INDOOR_DISTURBER_RESIST   */ { AS3935_AFE_GAIN_INDOOR,  AS3935_NF_2000uVrms, AS3935_WDTH_6, AS3935_SREJ_3  },
-        /* INDOOR_DISTURBER_STRICT   */ { AS3935_AFE_GAIN_INDOOR,  AS3935_NF_2000uVrms, AS3935_WDTH_9, AS3935_SREJ_3  },
-        /* OUTDOOR_VERY_SENSITIVE    */ { AS3935_AFE_GAIN_OUTDOOR, AS3935_NF_860uVrms,  AS3935_WDTH_2, AS3935_SREJ_2  },
-        /* OUTDOOR_SENSITIVE         */ { AS3935_AFE_GAIN_OUTDOOR, AS3935_NF_1100uVrms, AS3935_WDTH_2, AS3935_SREJ_2  },
-        /* OUTDOOR_BALANCED          */ { AS3935_AFE_GAIN_OUTDOOR, AS3935_NF_1800uVrms, AS3935_WDTH_3, AS3935_SREJ_3  },
-        /* OUTDOOR_DISTURBER_RESIST  */ { AS3935_AFE_GAIN_OUTDOOR, AS3935_NF_2000uVrms, AS3935_WDTH_6, AS3935_SREJ_3  },
-        /* OUTDOOR_MINIMAL_SENS      */ { AS3935_AFE_GAIN_OUTDOOR, AS3935_NF_2000uVrms, AS3935_WDTH_7, AS3935_SREJ_7  },
+			{ AS3935_AFE_GAIN_INDOOR,  AS3935_NF_860uVrms,  AS3935_WDTH_2, AS3935_SREJ_2  },	/* INDOOR_VERY_SENSITIVE     */
+      { AS3935_AFE_GAIN_INDOOR,  AS3935_NF_1100uVrms, AS3935_WDTH_2, AS3935_SREJ_2  },	/* INDOOR_BALANCED_1         */
+      { AS3935_AFE_GAIN_INDOOR,  AS3935_NF_1800uVrms, AS3935_WDTH_2, AS3935_SREJ_3  },	/* INDOOR_BALANCED_2         */
+      { AS3935_AFE_GAIN_INDOOR,  AS3935_NF_2000uVrms, AS3935_WDTH_6, AS3935_SREJ_3  },	/* INDOOR_DISTURBER_RESIST   */
+      { AS3935_AFE_GAIN_INDOOR,  AS3935_NF_2000uVrms, AS3935_WDTH_9, AS3935_SREJ_3  },	/* INDOOR_DISTURBER_STRICT   */
+      { AS3935_AFE_GAIN_OUTDOOR, AS3935_NF_860uVrms,  AS3935_WDTH_2, AS3935_SREJ_2  },	/* OUTDOOR_VERY_SENSITIVE    */
+      { AS3935_AFE_GAIN_OUTDOOR, AS3935_NF_1100uVrms, AS3935_WDTH_2, AS3935_SREJ_2  },	/* OUTDOOR_SENSITIVE         */
+      { AS3935_AFE_GAIN_OUTDOOR, AS3935_NF_1800uVrms, AS3935_WDTH_3, AS3935_SREJ_3  },	/* OUTDOOR_BALANCED          */
+      { AS3935_AFE_GAIN_OUTDOOR, AS3935_NF_2000uVrms, AS3935_WDTH_6, AS3935_SREJ_3  },	/* OUTDOOR_DISTURBER_RESIST  */
+      { AS3935_AFE_GAIN_OUTDOOR, AS3935_NF_2000uVrms, AS3935_WDTH_7, AS3935_SREJ_7  },	/* OUTDOOR_MINIMAL_SENS      */
     };
 
     uint8_t idx = (uint8_t)profile - 1U;
@@ -569,8 +537,7 @@ HAL_StatusTypeDef AS3935_ApplySensitivityProfile(AS3935_Profile_t profile)
  *          The caller must pass the result to AS3935_SetTuningCapacitor().
  * @return  Best AS3935_TuneCap_t value found.
  */
-AS3935_TuneCap_t AS3935_TuneAntenna(void)
-{
+AS3935_TuneCap_t AS3935_TuneAntenna(void) {
     /* Target frequencies per datasheet. */
     const uint32_t TARGET_LCO  = 500000U;   /* Antenna resonance          */
     const uint32_t TARGET_TRCO = 32768U;    /* Timer RC oscillator        */
@@ -585,37 +552,31 @@ AS3935_TuneCap_t AS3935_TuneAntenna(void)
     /* LCO divider must be /16 before routing LCO to the IRQ pin. */
     AS3935_SetFrequencyDivisionRatio(AS3935_LCO_FDIV_16);
 
-    for (AS3935_TuneCap_t cap = AS3935_TUN_CAP_0pF;
-         cap <= AS3935_TUN_CAP_120pF;
-         cap++) {
+    for (AS3935_TuneCap_t cap = AS3935_TUN_CAP_0pF; cap <= AS3935_TUN_CAP_120pF; cap++) {
 
         AS3935_Sensor.IRQ.Val.BitField.TUN_CAP = cap;
 
         /* --- Measure LCO (antenna resonance, affected by tuning cap) --- */
         AS3935_Sensor.IRQ.Val.BitField.OSC_DISP = AS3935_OSC_LCO;
-        AS3935_WriteReg(AS3935_REG_FREQ_DISP_IRQ,
-                        (uint8_t *)&AS3935_Sensor.IRQ.Val.Value, 1);
+        AS3935_WriteReg(AS3935_REG_FREQ_DISP_IRQ, (uint8_t *)&AS3935_Sensor.IRQ.Val.Value, 1);
         HAL_Delay(50);
         uint32_t lcoFreq  = 16U * AS3935_MeasureFrequencyHz();
 
         /* --- Measure TRCO (~32.768 kHz, calibration quality check) --- */
         AS3935_Sensor.IRQ.Val.BitField.OSC_DISP = AS3935_OSC_TRCO;
-        AS3935_WriteReg(AS3935_REG_FREQ_DISP_IRQ,
-                        (uint8_t *)&AS3935_Sensor.IRQ.Val.Value, 1);
+        AS3935_WriteReg(AS3935_REG_FREQ_DISP_IRQ, (uint8_t *)&AS3935_Sensor.IRQ.Val.Value, 1);
         HAL_Delay(50);
         uint32_t trcoFreq = AS3935_MeasureFrequencyHz();
 
         /* --- Measure SRCO (~1.1 MHz, calibration quality check) --- */
         AS3935_Sensor.IRQ.Val.BitField.OSC_DISP = AS3935_OSC_SRCO;
-        AS3935_WriteReg(AS3935_REG_FREQ_DISP_IRQ,
-                        (uint8_t *)&AS3935_Sensor.IRQ.Val.Value, 1);
+        AS3935_WriteReg(AS3935_REG_FREQ_DISP_IRQ, (uint8_t *)&AS3935_Sensor.IRQ.Val.Value, 1);
         HAL_Delay(50);
         uint32_t srcoFreq = AS3935_MeasureFrequencyHz();
 
         /* Disable oscillator output before next iteration. */
         AS3935_Sensor.IRQ.Val.BitField.OSC_DISP = AS3935_OSC_NONE;
-        AS3935_WriteReg(AS3935_REG_FREQ_DISP_IRQ,
-                        (uint8_t *)&AS3935_Sensor.IRQ.Val.Value, 1);
+        AS3935_WriteReg(AS3935_REG_FREQ_DISP_IRQ, (uint8_t *)&AS3935_Sensor.IRQ.Val.Value, 1);
 
         /* Compute relative error in ppm for each oscillator so that all
          * three contribute equally regardless of their absolute frequency.
@@ -624,12 +585,9 @@ AS3935_TuneCap_t AS3935_TuneAntenna(void)
          * LCO is the only signal affected by the tuning capacitor, but
          * logging TRCO/SRCO lets you verify oscillator calibration health
          * across the full sweep without a separate measurement pass.       */
-        uint32_t lcoPpm  = (AS3935_ABS_DIFF(lcoFreq,  TARGET_LCO)  * 1000000U)
-                           / TARGET_LCO;
-        uint32_t trcoPpm = (AS3935_ABS_DIFF(trcoFreq, TARGET_TRCO) * 1000000U)
-                           / TARGET_TRCO;
-        uint32_t srcoPpm = (AS3935_ABS_DIFF(srcoFreq, TARGET_SRCO) * 1000000U)
-                           / TARGET_SRCO;
+        uint32_t lcoPpm  = (AS3935_ABS_DIFF(lcoFreq,  TARGET_LCO)  * 1000000U) / TARGET_LCO;
+        uint32_t trcoPpm = (AS3935_ABS_DIFF(trcoFreq, TARGET_TRCO) * 1000000U) / TARGET_TRCO;
+        uint32_t srcoPpm = (AS3935_ABS_DIFF(srcoFreq, TARGET_SRCO) * 1000000U) / TARGET_SRCO;
 
         /* Weight LCO 4x — it is the only signal the tuning cap affects.
          * TRCO and SRCO act as tie-breakers between caps with similar LCO
@@ -637,8 +595,7 @@ AS3935_TuneCap_t AS3935_TuneAntenna(void)
         uint32_t combined = (4U * lcoPpm) + trcoPpm + srcoPpm;
 
         DEBUG("Cap %2d | LCO %6lu Hz (%5lu ppm) | TRCO %5lu Hz (%5lu ppm)"
-              " | SRCO %7lu Hz (%5lu ppm) | score %lu\n",
-              (int)cap,
+              " | SRCO %7lu Hz (%5lu ppm) | score %lu\n", (int)cap,
               (unsigned long)lcoFreq,  (unsigned long)lcoPpm,
               (unsigned long)trcoFreq, (unsigned long)trcoPpm,
               (unsigned long)srcoFreq, (unsigned long)srcoPpm,
@@ -652,11 +609,9 @@ AS3935_TuneCap_t AS3935_TuneAntenna(void)
 
     /* Leave oscillator output disabled. */
     AS3935_Sensor.IRQ.Val.BitField.OSC_DISP = AS3935_OSC_NONE;
-    AS3935_WriteReg(AS3935_REG_FREQ_DISP_IRQ,
-                    (uint8_t *)&AS3935_Sensor.IRQ.Val.Value, 1);
+    AS3935_WriteReg(AS3935_REG_FREQ_DISP_IRQ, (uint8_t *)&AS3935_Sensor.IRQ.Val.Value, 1);
 
-    DEBUG("AS3935: Best cap = %d  score = %lu ppm\n",
-          (int)bestCap, (unsigned long)minError);
+    DEBUG("AS3935: Best cap = %d  score = %lu ppm\n", (int)bestCap, (unsigned long)minError);
 
     return bestCap;
 }
