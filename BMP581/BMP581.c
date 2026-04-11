@@ -129,7 +129,7 @@ HAL_StatusTypeDef BMP581_Init(void) {
     }
 		BMP581_ReadAllRegisters();
 		
-		bmp581_regs.ODR_CONFIG.Val.BitField.odr      = BMP581_ODR_4_HZ;
+		bmp581_regs.ODR_CONFIG.Val.BitField.odr      = BMP581_ODR_0_5_HZ;
     bmp581_regs.ODR_CONFIG.Val.BitField.pwr_mode = BMP581_PWRMODE_STANDBY;
     bmp581_regs.ODR_CONFIG.Val.BitField.deep_dis = BMP581_DEEP_DISABLED;
     if (BMP581_Set_ODRConfig() != HAL_OK) {
@@ -140,8 +140,8 @@ HAL_StatusTypeDef BMP581_Init(void) {
 		
     // Step 5: Configure OSR — 64x pressure and 64x temperature for equal accuracy averaging
     // t_meas = 0.5 + 64*0.2415 + 64*0.2415 = 31.4 ms → max ODR ~32 Hz; 4 Hz is well within budget
-    bmp581_regs.OSR_CONFIG.Val.BitField.osr_t    = BMP581_OSR_1X;  // 64x temperature OSR
-    bmp581_regs.OSR_CONFIG.Val.BitField.osr_p    = BMP581_OSR_1X;  // 64x pressure OSR
+    bmp581_regs.OSR_CONFIG.Val.BitField.osr_t    = BMP581_OSR_128X;  // 128x temperature OSR
+    bmp581_regs.OSR_CONFIG.Val.BitField.osr_p    = BMP581_OSR_128X;  // 128x pressure OSR
     bmp581_regs.OSR_CONFIG.Val.BitField.press_en = 1;               // Enable pressure measurement
     if (BMP581_Set_OSRConfig() != HAL_OK) {
         return HAL_ERROR;
@@ -160,8 +160,8 @@ HAL_StatusTypeDef BMP581_Init(void) {
     }
 
     // Step 7: Set IIR filter coefficients — 0x07 = coefficient 127 (maximum smoothing)
-    bmp581_regs.DSP_IIR_CONFIG.Val.BitField.set_iir_t = BMP581_IIR_COEFF_127;  // Temperature IIR
-    bmp581_regs.DSP_IIR_CONFIG.Val.BitField.set_iir_p = BMP581_IIR_COEFF_127;  // Pressure IIR
+    bmp581_regs.DSP_IIR_CONFIG.Val.BitField.set_iir_t = BMP581_IIR_COEFF_63;  // Temperature IIR
+    bmp581_regs.DSP_IIR_CONFIG.Val.BitField.set_iir_p = BMP581_IIR_COEFF_63;  // Pressure IIR
     if (BMP581_Set_DSPIIRConfig() != HAL_OK) {
         return HAL_ERROR;
     }
@@ -203,12 +203,13 @@ HAL_StatusTypeDef BMP581_Init(void) {
     }
 
     // Step 12: Start measurements — ODR and power mode set last per Bosch API examples.
-    // 4 Hz is valid for 64x+64x OSR (t_meas 31 ms << 250 ms period).
-    bmp581_regs.ODR_CONFIG.Val.BitField.pwr_mode = BMP581_PWRMODE_NONSTOP;
+    // 1 Hz is valid for 1x+1x OSR (t_meas ~1 ms << 1000 ms period).
+		bmp581_regs.ODR_CONFIG.Val.BitField.odr      = BMP581_ODR_0_5_HZ;
+		bmp581_regs.ODR_CONFIG.Val.BitField.pwr_mode = BMP581_PWRMODE_NORMAL;
+		bmp581_regs.ODR_CONFIG.Val.BitField.deep_dis = BMP581_DEEP_DISABLED;
     if (BMP581_Set_ODRConfig() != HAL_OK) {
         return HAL_ERROR;
     }
-
     // Step 13: Validate ODR/OSR combination — sensor sets odr_is_valid = 1 if accepted.
     // __DSB() drains the Cortex-M4 write buffer before the I2C readback.
     __DSB();
