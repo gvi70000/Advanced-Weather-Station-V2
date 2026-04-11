@@ -43,7 +43,7 @@ void MX_TIM2_Init(void)
   TIM_IC_InitTypeDef sConfigIC = {0};
 
   /* USER CODE BEGIN TIM2_Init 1 */
-  /* htim2.Init.Prescaler = 169; to get 1us ticks */
+	// If PSC = 16 (10 MHz timer)
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
   htim2.Init.Prescaler = 169;
@@ -222,11 +222,11 @@ void HAL_TIM_Base_MspDeInit(TIM_HandleTypeDef* tim_baseHandle)
  * Each wind measurement arms CH1, CH2, CH3 for 2 captures each.  The DMA TC
  * interrupt fires individually when each channel finishes its 2-capture burst.
  * We must wait until ALL THREE channels have completed before signalling the
- * measurement code — reading ToF_Result[][].E1 from a channel that hasn't
+ * measurement code ï¿½ reading ToF_Result[][].E1 from a channel that hasn't
  * fired its TC yet yields stale or zero data.
  *
  * Implementation:
- *   A static bitmask `chan_done` accumulates completed channels using the
+ *   A static bitmask `channel_done` accumulates completed channels using the
  *   HAL_TIM_ActiveChannel bit values (CH1=0x01, CH2=0x02, CH3=0x04).
  *   Decpl_RDY is set only when all three bits are present.
  *
@@ -238,29 +238,22 @@ void HAL_TIM_Base_MspDeInit(TIM_HandleTypeDef* tim_baseHandle)
  *   values (1,2,4,8).  HAL_TIM_ACTIVE_CHANNEL_4=0x08 < 0x0C, so CH4 would
  *   have incorrectly set Decpl_RDY on any AS3935 edge.
  *
- *   chan_done is cleared in run_one_measurement() BEFORE DMA channels are
+ *   Decpl_RDY is cleared in run_one_measurement() BEFORE DMA channels are
  *   armed, not here, to avoid a race between the clear and a late-arriving TC.
  */
-#define DECPL_CHANNELS_MASK (HAL_TIM_ACTIVE_CHANNEL_1 | HAL_TIM_ACTIVE_CHANNEL_2 | HAL_TIM_ACTIVE_CHANNEL_3)  /* = 0x07u */
+#define DECPL_CHANNELS_MASK  (HAL_TIM_ACTIVE_CHANNEL_1 | HAL_TIM_ACTIVE_CHANNEL_2 | HAL_TIM_ACTIVE_CHANNEL_3)  /* = 0x07u */
 
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
-    static volatile uint8_t chan_done = 0u;
+    static volatile uint8_t channel_done = 0;
     /* Accumulate only DECPL channels (CH1/2/3); ignore CH4 = AS3935 */
     if ((htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1) || (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2) || (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_3)) {
-        chan_done |= (uint8_t)htim->Channel;
-        if ((chan_done & (uint8_t)DECPL_CHANNELS_MASK) == (uint8_t)DECPL_CHANNELS_MASK) {
-            chan_done  = 0u;
-            Decpl_RDY  = 1u;
+        channel_done |= (uint8_t)htim->Channel;
+        if ((channel_done & (uint8_t)DECPL_CHANNELS_MASK) == (uint8_t)DECPL_CHANNELS_MASK) {
+            channel_done  = 0;
+            Decpl_RDY  = 1;
         }
     }
 }
 
-/* Called by run_one_measurement() before arming DMA to reset the bitmask */
-void DECPL_ResetReadyFlag(void) {
-    /* Disable interrupts briefly to avoid a race if a stale TC fires here */
-    __disable_irq();
-    Decpl_RDY = 0u;
-    __enable_irq();
-}
-
 /* USER CODE END 1 */
+

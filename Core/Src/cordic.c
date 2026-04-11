@@ -21,7 +21,9 @@
 #include "cordic.h"
 
 /* USER CODE BEGIN 0 */
-
+#define Q31_MAX							2147483647.0f										// 2^31 - 1: float<->Q1.31 conversion scale factor
+#define CORDIC_PHASE_TO_DEG	180.0f													// CORDIC PHASE output [-1,+1] maps to [-180�,+180�]
+#define CORDIC_Q31_TO_DEG   (CORDIC_PHASE_TO_DEG / Q31_MAX)	// Q1.31 -> degrees scale factor
 /* USER CODE END 0 */
 
 CORDIC_HandleTypeDef hcordic;
@@ -131,3 +133,4 @@ void HAL_CORDIC_MspDeInit(CORDIC_HandleTypeDef* cordicHandle)
 /* USER CODE BEGIN 1 */
 
 /* USER CODE END 1 */
+

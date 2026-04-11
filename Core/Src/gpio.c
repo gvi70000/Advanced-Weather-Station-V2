@@ -29,10 +29,14 @@
 /* Configure GPIO                                                             */
 /*----------------------------------------------------------------------------*/
 /* USER CODE BEGIN 1 */
-// BMP581 data-ready flag � set by HAL_GPIO_EXTI_Callback on BMP_INT_Pin
+// Data-ready flag set by HAL_GPIO_EXTI_Callback on XXXX_INT_Pin
+volatile uint8_t AS3935_Ready = 0;
+volatile uint8_t AS7331_Ready = 0;
+volatile uint8_t ENS160_Ready = 0;
 volatile uint8_t BMP_Ready = 0;
 volatile uint8_t TCS34003_Ready = 0;
 volatile uint8_t TSL25911_Ready = 0;
+
 /* USER CODE END 1 */
 
 /** Configure pins as
@@ -78,8 +82,8 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : INT_ES160_Pin INT_TCS34717_Pin INT_TSL25911_Pin */
-  GPIO_InitStruct.Pin = INT_ES160_Pin|INT_TCS34717_Pin|INT_TSL25911_Pin;
+  /*Configure GPIO pins : INT_ES160_Pin INT_TCS34003_Pin INT_TSL25911_Pin */
+  GPIO_InitStruct.Pin = INT_ES160_Pin|INT_TCS34003_Pin|INT_TSL25911_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
@@ -98,6 +102,9 @@ void MX_GPIO_Init(void)
   HAL_GPIO_Init(GET_ESP_MSG_GPIO_Port, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI4_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI4_IRQn);
+
   HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 
@@ -125,14 +132,23 @@ void Disable_EXTI_AS3935(void) {
   HAL_NVIC_DisableIRQ(EXTI0_IRQn);
 }
 
-// EXTI callback � sets sensor ready flags
+// EXTI callback sets sensor ready flags
 // NOTE: HAL_GPIO_EXTI_IRQHandler already clears the pending bit. Do NOT call
 // __HAL_GPIO_EXTI_CLEAR_IT here; it can re-trigger the interrupt on some STM32F3 silicon.
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    if (GPIO_Pin == INT_AS3935_Pin) {
+        AS3935_Ready = 1;
+    }
+    if (GPIO_Pin == INT_AS7331_Pin) {
+        AS7331_Ready = 1;
+    }
+    if (GPIO_Pin == INT_ES160_Pin) {
+        ENS160_Ready = 1;
+    }			
     if (GPIO_Pin == BMP_INT_Pin) {
         BMP_Ready = 1;
     }
-    if (GPIO_Pin == BMP_INT_Pin) {
+    if (GPIO_Pin == INT_TCS34003_Pin) {
         TCS34003_Ready = 1;
     }
 		if (GPIO_Pin == INT_TSL25911_Pin) {
