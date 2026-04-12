@@ -36,28 +36,28 @@
  * ---------------------------------------------------------------------- */
 
 /// @brief 8-bit I2C write address (7-bit addr 0x03, ADD1=1, ADD0=1).
-#define AS3935_I2C_ADDRESS      0x06U   /* (0x03 << 1) */
+#define AS3935_I2C_ADDRESS      0x06   /* (0x03 << 1) */
 
 /// @brief Value written to REG0x3C / REG0x3D to execute a direct command.
-#define AS3935_DIRECT_COMMAND   0x96U
+#define AS3935_DIRECT_COMMAND   0x96
 
 /// @brief Minimum delay (ms) after issuing a direct command (datasheet: 2 ms).
-#define AS3935_CMD_DELAY_MS     4U
+#define AS3935_CMD_DELAY_MS     4
 
 /// @brief Delay (ms) after CALIB_RCO before disabling oscillator display.
-#define AS3935_CALIB_DELAY_MS   20U
+#define AS3935_CALIB_DELAY_MS   20
 
 /// @brief Delay (ms) after IRQ goes high before reading INT register.
-#define AS3935_IRQ_DELAY_MS     2U
+#define AS3935_IRQ_DELAY_MS     2
 
 /// @brief Helper: absolute difference of two unsigned values.
 #define AS3935_ABS_DIFF(a, b)   ((a) > (b) ? ((a) - (b)) : ((b) - (a)))
 
 /// @brief Target LCO antenna frequency (Hz).
-#define AS3935_TARGET_FREQUENCY     500000U
+#define AS3935_TARGET_FREQUENCY     500000
 
 /// @brief Acceptable LCO frequency tolerance (Hz) — 3.5 % of 500 kHz.
-#define AS3935_FREQUENCY_TOLERANCE  17500U
+#define AS3935_FREQUENCY_TOLERANCE  17500
 
 /* =========================================================================
  * REG 0x00 — Power management and AFE gain boost
