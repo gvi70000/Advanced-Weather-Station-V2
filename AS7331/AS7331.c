@@ -42,8 +42,7 @@ static volatile AS7331_STATUS_t  as7331_status;
  * @return HAL status.
  */
 static HAL_StatusTypeDef AS7331_WriteReg(uint8_t reg, uint8_t data) {
-    return HAL_I2C_Mem_Write(&hi2c1, AS7331_I2C_ADDR, reg,
-                             I2C_MEMADD_SIZE_8BIT, &data, 1, TIMEOUT_COMM);
+    return HAL_I2C_Mem_Write(&hi2c1, AS7331_I2C_ADDR, reg, I2C_MEMADD_SIZE_8BIT, &data, 1, TIMEOUT_COMM);
 }
 
 /**
@@ -54,8 +53,7 @@ static HAL_StatusTypeDef AS7331_WriteReg(uint8_t reg, uint8_t data) {
  * @return HAL status.
  */
 static HAL_StatusTypeDef AS7331_ReadRegs(uint8_t reg, uint8_t *buf, uint16_t len) {
-    return HAL_I2C_Mem_Read(&hi2c1, AS7331_I2C_ADDR, reg,
-                            I2C_MEMADD_SIZE_8BIT, buf, len, TIMEOUT_COMM);
+    return HAL_I2C_Mem_Read(&hi2c1, AS7331_I2C_ADDR, reg, I2C_MEMADD_SIZE_8BIT, buf, len, TIMEOUT_COMM);
 }
 
 // ─── OSR write helper (used by all OSR-modifying functions) ───────────────────
@@ -327,9 +325,7 @@ HAL_StatusTypeDef AS7331_ReadConversionTime(uint32_t *conversionTime) {
     if (AS7331_ReadRegs(AS7331_REG_OUTCONVL, outconvl, 2) != HAL_OK) return HAL_ERROR;
     if (AS7331_ReadRegs(AS7331_REG_OUTCONVH, outconvh, 2) != HAL_OK) return HAL_ERROR;
 
-    *conversionTime = ((uint32_t)outconvh[0] << 16)
-                    | ((uint32_t)outconvl[1] << 8)
-                    |  (uint32_t)outconvl[0];
+    *conversionTime = ((uint32_t)outconvh[0] << 16) | ((uint32_t)outconvl[1] << 8) |  (uint32_t)outconvl[0];
     return HAL_OK;
 }
 
@@ -352,27 +348,24 @@ HAL_StatusTypeDef AS7331_ReadConversionTime(uint32_t *conversionTime) {
  */
 HAL_StatusTypeDef AS7331_ReadUVData(AS7331_DataOut_t *uvData) {
     // Update STATUS to check if new data is available
-    if (AS7331_GetOSR_Status() != HAL_OK) return HAL_ERROR;
+    if (AS7331_GetOSR_Status() != HAL_OK)
+			return HAL_ERROR;
 
     if (as7331_status.Val.BitField.NDATA == 0) {
         return HAL_BUSY;  // No new data — not an error; poll again during BREAK period
     }
-
     // Burst read 8 bytes: TEMP(2) + MRES1(2) + MRES2(2) + MRES3(2)
     uint8_t buf[AS7331_UV_DATA_SIZE];
     if (AS7331_ReadRegs(AS7331_REG_TEMP, buf, AS7331_UV_DATA_SIZE) != HAL_OK) {
         return HAL_ERROR;
     }
-
     // Parse temperature — 12-bit value in bits [11:0], upper nibble reserved
     uint16_t temp_raw = (uint16_t)(((uint16_t)buf[1] << 8) | buf[0]) & 0x0FFFu;
     uvData->TEMP_C100 = (int16_t)((int32_t)temp_raw * AS7331_TEMP_SCALE - AS7331_TEMP_OFFSET);
-
     // Parse UVA (MRES1), UVB (MRES2), UVC (MRES3) — all 16-bit little-endian
     uvData->UVA = (uint16_t)(((uint16_t)buf[3] << 8) | buf[2]);
     uvData->UVB = (uint16_t)(((uint16_t)buf[5] << 8) | buf[4]);
     uvData->UVC = (uint16_t)(((uint16_t)buf[7] << 8) | buf[6]);
-
     return HAL_OK;
 }
 
@@ -396,41 +389,43 @@ HAL_StatusTypeDef AS7331_ReadUVData(AS7331_DataOut_t *uvData) {
  */
 HAL_StatusTypeDef AS7331_Init(void) {
     // Step 1: Software reset
-    if (AS7331_SoftReset(AS7331_SW_RST_ON)  != HAL_OK) return HAL_ERROR;
+    if (AS7331_SoftReset(AS7331_SW_RST_ON)  != HAL_OK)
+			return HAL_ERROR;
     HAL_Delay(100);  // ≥ 100 ms for reset to complete
-    if (AS7331_SoftReset(AS7331_SW_RST_OFF) != HAL_OK) return HAL_ERROR;
-
+    if (AS7331_SoftReset(AS7331_SW_RST_OFF) != HAL_OK)
+			return HAL_ERROR;
     // Step 2: Power on and wait for analog startup
-    if (AS7331_SetPower(AS7331_PD_OFF) != HAL_OK) return HAL_ERROR;
+    if (AS7331_SetPower(AS7331_PD_OFF) != HAL_OK)
+			return HAL_ERROR;
     HAL_Delay(2);  // TSTARTPD = 1.2 ms typ; 2 ms provides margin
-
     // Step 3: Enter Configuration state
-    if (AS7331_SetOperationalState(AS7331_DOS_CONFIGURATION) != HAL_OK) return HAL_ERROR;
-
+    if (AS7331_SetOperationalState(AS7331_DOS_CONFIGURATION) != HAL_OK)
+			return HAL_ERROR;
     // Step 4: Verify device ID
-    if (AS7331_VerifyDeviceID() != HAL_OK) return HAL_ERROR;
-
+    if (AS7331_VerifyDeviceID() != HAL_OK)
+			return HAL_ERROR;
     // Step 5: Configure integration time and gain
-    if (AS7331_SetIntegrationTime(AS7331_TIME_2048MS) != HAL_OK) return HAL_ERROR;
-    if (AS7331_SetGain(AS7331_GAIN_1X)                != HAL_OK) return HAL_ERROR;
-
+    if (AS7331_SetIntegrationTime(AS7331_TIME_1024MS) != HAL_OK)
+			return HAL_ERROR;
+    if (AS7331_SetGain(AS7331_GAIN_1X) != HAL_OK)
+			return HAL_ERROR;
     // Step 6: Set continuous measurement mode
-    if (AS7331_SetMeasurementMode(AS7331_MMODE_CONT) != HAL_OK) return HAL_ERROR;
-
+    if (AS7331_SetMeasurementMode(AS7331_MMODE_CONT) != HAL_OK)
+			return HAL_ERROR;
     // Step 7: READY pin as push-pull output
-    if (AS7331_SetReadyOutputMode(AS7331_RDYOD_PUSH_PULL) != HAL_OK) return HAL_ERROR;
-
+    if (AS7331_SetReadyOutputMode(AS7331_RDYOD_PUSH_PULL) != HAL_OK)
+			return HAL_ERROR;
     // Step 8: Internal clock at 1 MHz (lowest frequency = lowest power)
-    if (AS7331_SetClockFrequency(AS7331_CLK_1MHZ) != HAL_OK) return HAL_ERROR;
-
+    if (AS7331_SetClockFrequency(AS7331_CLK_1MHZ) != HAL_OK)
+			return HAL_ERROR;
     // Step 9: Break time — 127 * 8 µs = 1016 µs between conversions for I2C data fetch
-    if (AS7331_SetBreakTime(127) != HAL_OK) return HAL_ERROR;
-
+    if (AS7331_SetBreakTime(127) != HAL_OK)
+			return HAL_ERROR;
     // Step 10: Switch to Measurement state
-    if (AS7331_SetOperationalState(AS7331_DOS_MEASUREMENT) != HAL_OK) return HAL_ERROR;
-
+    if (AS7331_SetOperationalState(AS7331_DOS_MEASUREMENT) != HAL_OK)
+			return HAL_ERROR;
     // Step 11: Start continuous measurement
-    if (AS7331_StartStopMeasurement(AS7331_SS_START) != HAL_OK) return HAL_ERROR;
-
+    if (AS7331_StartStopMeasurement(AS7331_SS_START) != HAL_OK)
+			return HAL_ERROR;
     return HAL_OK;
 }
