@@ -26,7 +26,7 @@
 
 #include "stm32g4xx_hal.h"
 
-// @brief Wind measurement result returned by PGA460_MeasureWind().
+// @brief Wind measurement result returned by Wind_Measure().
 typedef struct __attribute__((packed)) {
     float Speed;      // Wind speed in m/s
     float Direction;  // Wind direction in degrees FROM (0/360 = N, 90 = E, 180 = S, 270 = W)
@@ -34,14 +34,14 @@ typedef struct __attribute__((packed)) {
 
 // @brief Environmental data used to compute the speed of sound in moist air.
 // @details Populate via BMP581 (Temperature, Pressure), HDC302x (RH), and GPS (Height).
-//          Call PGA460_UpdateEnvironment() to update and recompute SoundSpeed.
+//          Call Wind_UpdateEnvironment() to update and recompute SoundSpeed.
 //          SoundSpeed is then used automatically by PGA460_MeasureWind().
 typedef struct __attribute__((packed)) {
-    float Height;      // Altitude above sea level in metres (from GPS; 0 to use barometric estimate)
+    //float Height;      // Altitude above sea level in metres (from GPS; 0 to use barometric estimate)
     float Temperature; // Ambient temperature in degrees Celsius (from BMP581 / HDC302x)
     float RH;          // Relative humidity in % (from HDC302x)
     float Pressure;    // Atmospheric pressure in hPa (from BMP581; 0 to estimate from Height)
-    float SoundSpeed;  // Speed of sound in m/s - computed by PGA460_UpdateEnvironment()
+    float SoundSpeed;  // Speed of sound in m/s - computed by Wind_UpdateEnvironment()
 } Wind_EnvData_t;
 
 /* Symbolic indices for the six one-way ToF paths */
@@ -55,10 +55,11 @@ typedef enum {
     TOF_PATH_COUNT = 6
 } ToFPath_t;
 
-// Global environmental data instance (defined in PGA460.c).
-// Read SoundSpeed after calling PGA460_UpdateEnvironment().
+// Global environmental data instance (defined in Wind.c).
+// Read SoundSpeed after calling Wind_UpdateEnvironment().
 extern Wind_EnvData_t externalData;
 
+void Wind_Init(void);
 
 // @brief Load previously calibrated path lengths from each sensor's PGA460 USER_DATA EEPROM.
 // @details Call once at boot after PGA460_Init() so prior calibrations survive power-off.
@@ -66,24 +67,16 @@ extern Wind_EnvData_t externalData;
 void Wind_LoadCalibration(void);
 
 // @brief Measure the true acoustic path length for all three transducer pairs in still air.
-// @details Fires all three transmitters N_CAL times (identical to PGA460_MeasureWind), computes
+// @details Fires all three transmitters N_CAL times (identical to Wind_Measure), computes
 //          D_ij = c * (t_ij + t_ji) / 2 for each bidirectional pair (wind cancels in the sum),
 //          stores results in RAM and optionally in each sensor's PGA460 USER_DATA EEPROM.
 //          Must be called with no wind present (indoor bench or sealed enclosure).
-// @param soundSpeed_ms  Speed of sound in m/s from PGA460_UpdateEnvironment() (1 m/s = 1 um/us).
+// @param soundSpeed_ms  Speed of sound in m/s from Wind_UpdateEnvironment() (1 m/s = 1 um/us).
 // @param burnEEPROM     1 = commit calibration values to PGA460 EEPROM flash; 0 = RAM only.
 // @return HAL status.
 HAL_StatusTypeDef Wind_CalibrateReflector(float soundSpeed_ms, uint8_t burnEEPROM);
 
-// @brief Update environmental data and recompute speed of sound.
-// @details Writes tempC, rh, hPa, and height_m into externalData and calls
-//          PGA460_ComputeSoundSpeed() to refresh externalData.SoundSpeed.
-//          Call whenever BMP581, HDC302x, or GPS data is refreshed (typically once per second).
-// @param tempC     Ambient temperature in degrees Celsius.
-// @param rh        Relative humidity in %.
-// @param hPa       Atmospheric pressure in hPa.
-// @param height_m  Altitude in metres above sea level (0 to estimate from pressure).
-void Wind_UpdateEnvironment(float tempC, float rh, float hPa, float height_m);
+float Wind_ComputeSoundSpeed(Wind_EnvData_t *env);
 
 // @brief Perform a full 3-transmitter measurement cycle and return filtered wind vector.
 // @details Fires each transmitter in turn via TIM2 DECPL hardware timestamping (DMA),

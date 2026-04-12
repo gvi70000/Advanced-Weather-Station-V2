@@ -40,16 +40,10 @@
 extern volatile DecplTimes_t  ToF_Result[3];  
 extern volatile uint8_t Decpl_RDY;
 
-#define INV_SQRT3						0.57735026919f			// 1/sqrt(3)
-#define DEG_PER_RAD					57.29577951308232f	// 180/pi
-
-// Reflection Path Length
-#define DISTANCE						0.15588f		// Total reflection path length in meters
-
 #define R_D									287.05f			// Specific gas constant for dry air (J/kg.K)
 #define R_V									461.495f		// Specific gas constant for water vapor (J/kg.K)
 #define GAMMA								1.4f				// Adiabatic index for air
-#define GAMMA_R_D						GAMMA * R_D	// GAMMA * R_D
+#define GAMMA_R_D						(GAMMA * R_D)	// GAMMA * R_D
 #define L										0.0065f			// Temperature lapse rate (K/m)
 #define T0									288.15f			// Standard temperature at sea level (K)
 #define P0									101325.0f		// Standard pressure at sea level (Pa)
@@ -71,16 +65,9 @@ extern volatile uint8_t Decpl_RDY;
 // 6 pulses at 58kHz are 104us
 // Time window of interst is from 600us to 1200us
 	
-#define BASE_DIAMETER_UM				100000	// In micro meters
-#define DISTANCE_UM						316228	// In micro meters
-#define CAPTURE_DELAY_MS				70			// Delay for sensor measurement to complete
-
-/* Cone generator = v(R2 + h2) = v(502 + 1502) mm, converted to um */
-#define CONE_R_MM           50.0f
-#define CONE_H_MM           150.0f
 #define CONE_L_MM           158.114f					/* v(502+1502)    */
 #define CONE_L_UM           158114						/* L in um        */
-#define NOMINAL_PATH_UM     2.0f * CONE_L_UM	/* 2 * CONE_L_UM */
+#define NOMINAL_PATH_UM     (2.0f * (float)CONE_L_UM)	/* 2 * CONE_L_UM */
 /*
  * Effective horizontal path unit vectors  *_ij = (pos_j - pos_i) / L
  *
@@ -110,8 +97,6 @@ extern volatile uint8_t Decpl_RDY;
  * before being written to the CORDIC (which requires inputs in [-1, 1]).
  * 100 m/s covers any meteorological condition with comfortable headroom.
  */
-#define CORDIC_SCALE   100.0f						/* m/s (= um/us)						*/
-#define CORDIC_INV     0.01f							/* 1 / WIND_CORDIC_SCALE		*/
 
 /* Q1.31 scale factor: maps float [-1,1] to int32_t */
 #define Q31_SCALE           2147483647.0f			/* 2^31 - 1                 */
@@ -130,12 +115,14 @@ extern volatile uint8_t Decpl_RDY;
 #define N_CAL               16     /* number of sample pairs to average    */
 #define CAL_PAIR_DELAY_MS   100    /* inter-pair delay during calibration   */
 
-#define TOF_MIN_TICKS	400
-#define TOF_MAX_TICKS	2000
+// If PSC = 16 (10 MHz timer)
+#define TICKS_PER_US	10.0f // because it has to be divided by 2, 10/2=5
+#define TICKS_HALF		(0.5f * TICKS_PER_US)
 
 // TIM2 is 170MHz on STM32G431 and is setup to have 1us period
-#define TOF_MIN_US			400
-#define TOF_MAX_US			2000
+#define TOF_MIN_TICKS	4000
+#define TOF_MAX_TICKS	20000
+
 
 /*===========================================================================
  * SLIDING-WINDOW MEDIAN FILTER
@@ -185,17 +172,33 @@ static uint8_t g_tof_count[TOF_PATH_COUNT];           /* valid sample count   */
  * Index i = transmitter index.  Populated by Wind_CalibrateReflector(). */
 static float g_pathLen_um[3] = {NOMINAL_PATH_UM, NOMINAL_PATH_UM, NOMINAL_PATH_UM};
 
-/* Wind_EnvData_t is declared in PGA460.h
-   It is filled in the main.c where we read the
-   sensors and we fill the data in structure*/
+const float height = 58.0f; // Height above mean sea level in meters
 
 Wind_EnvData_t externalData = {
-	.Height      = 58.0f,     // meters
 	.Temperature = 23.63f,    // degC
 	.RH          = 62.22f,    // %
 	.Pressure    = 1027.7f,   // hPa
 	.SoundSpeed  = 0.0f       // will be computed
 };
+
+static void TIM2_IC_Start_All(void) {
+    __HAL_TIM_DISABLE(&htim2);
+    __HAL_TIM_SET_COUNTER(&htim2, 0);
+    __HAL_TIM_ENABLE(&htim2);
+}
+
+static void TIM2_IC_Stop_All(void) {
+    __HAL_TIM_DISABLE(&htim2);
+}
+
+static inline void TIM2_Reset_DMA(void) {
+    for (int i = 0; i < 3; i++) {
+        DMA_HandleTypeDef *hdma = htim2.hdma[i];
+        __HAL_DMA_DISABLE(hdma);
+        hdma->Instance->CNDTR = 2;
+        __HAL_DMA_ENABLE(hdma);
+    }
+}
 
 /**
  * @brief Compute speed of sound in moist air from environmental data.
@@ -206,17 +209,16 @@ Wind_EnvData_t externalData = {
  * @param env  Pointer to Wind_EnvData_t (Temperature, RH, Pressure, Height).
  * @return Speed of sound in m/s(um/us), or 343.0f if env is NULL.
  */
-static float Wind_ComputeSoundSpeed(Wind_EnvData_t *env) {
+float Wind_ComputeSoundSpeed(Wind_EnvData_t *env) {
 	if (!env) return SOUND_SPEED;
 	const float T_C = env->Temperature;
 	const float T_K = T_C + KELVIN_OFFSET;
 	// --- Pressure (hPa). If not provided, estimate from height with std. atmosphere (0?11 km) ---
 	float P_hPa = env->Pressure;
 	if (P_hPa <= 0.0) {
-		const float h = env->Height; // meters
 		// Barometric formula (troposphere):
 		// P = P0 * (1 - L*h/T0)^(g*M/(R*L))  [Pa]
-		const float term = 1.0 - (L * h) / T0;
+		const float term = 1.0 - (L * height) / T0;
 		const float expo = (G * M) / (R * L);
 		float P_Pa = P0 * pow(term, expo);
 		if (P_Pa < 1.0) P_Pa = 1.0; // guard
@@ -413,11 +415,11 @@ static HAL_StatusTypeDef wait_decpl_ready(uint32_t timeout_ms) {
  *            7. Validate: delta ticks must be in [TOF_MIN_TICKS, TOF_MAX_TICKS].
  *          Unsigned tick subtraction is wrap-safe for deltas up to 12.6 s.
  * @param tx  Transmitter index (0-2).
- * @param tof_rx1_us  Output: one-way ToF to first receiver in us.
- * @param tof_rx2_us  Output: one-way ToF to second receiver in us.
+ * @param tof_rx1_ticks  Output: one-way ToF to first receiver in us.
+ * @param tof_rx2_ticks  Output: one-way ToF to second receiver in us.
  * @return HAL_OK, HAL_ERROR (invalid ToF), or HAL_TIMEOUT (no DECPL response).
  */
-static HAL_StatusTypeDef run_one_measurement(uint8_t tx, float  *tof_rx1_us, float  *tof_rx2_us) {
+static HAL_StatusTypeDef run_one_measurement(uint8_t tx, float  *tof_rx1_ticks, float  *tof_rx2_ticks) {
     uint8_t rx1 = (tx == 0) ? 1 : 0;
     uint8_t rx2 = (uint8_t)(3 - tx - rx1);
     /*
@@ -429,12 +431,14 @@ static HAL_StatusTypeDef run_one_measurement(uint8_t tx, float  *tof_rx1_us, flo
      * the explicit flag reset here is sufficient - the bitmask itself is reset
      * inside the callback when the mask completes.
      */
-    Decpl_RDY = 0;
-    memset((void *)ToF_Result, 0, sizeof(ToF_Result));
-    /* --- Arm TIM2 input-capture DMA: 2 edges per DECPL transducer --- */
-    HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_1, (uint32_t *)&ToF_Result[0].E0, 2u);
-    HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_2, (uint32_t *)&ToF_Result[1].E0, 2u);
-    HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_3, (uint32_t *)&ToF_Result[2].E0, 2u);
+			// Reset state
+			Decpl_RDY = 0;
+			memset((void *)ToF_Result, 0, sizeof(ToF_Result));
+			// Reset DMA counters
+			TIM2_Reset_DMA();
+			// Start all channels synchronously
+			TIM2_IC_Start_All();
+		
     /*
      * Command sequence:
      *
@@ -450,19 +454,17 @@ static HAL_StatusTypeDef run_one_measurement(uint8_t tx, float  *tof_rx1_us, flo
      *    The two receivers listen; when each detects its echo threshold
      *    crossing, its DECPL asserts ? captured as ToF_Result[rx].E1.
      */
-    PGA460_UltrasonicCmd(rx1, PGA460_CMD_BROADCAST_LISTEN_ONLY_P2, 1);
+    PGA460_UltrasonicCmd(rx1, PGA460_CMD_BROADCAST_LISTEN_ONLY_P2, 1); // sensorID irrelevant for broadcast
     PGA460_UltrasonicCmd(tx,  PGA460_CMD_BURST_AND_LISTEN_PRESET1, 1);
     /* --- Wait for all three DECPL TC interrupts via bitmask callback --- */
     if (wait_decpl_ready(10) != HAL_OK) {
-        HAL_TIM_IC_Stop_DMA(&htim2, TIM_CHANNEL_1);
-        HAL_TIM_IC_Stop_DMA(&htim2, TIM_CHANNEL_2);
-        HAL_TIM_IC_Stop_DMA(&htim2, TIM_CHANNEL_3);
+        // Stop timer, all captures stop instantly
+				TIM2_IC_Stop_All();
         DEBUG("Tx%u: DECPL timeout - check DECPL wiring and P1/P2 config\n", tx);
         return HAL_TIMEOUT;
     }
-    HAL_TIM_IC_Stop_DMA(&htim2, TIM_CHANNEL_1);
-    HAL_TIM_IC_Stop_DMA(&htim2, TIM_CHANNEL_2);
-    HAL_TIM_IC_Stop_DMA(&htim2, TIM_CHANNEL_3);
+    // Stop timer, all captures stop instantly
+    TIM2_IC_Stop_All();
     /*
      * Extract timestamps:
      *   E1[tx]  = end of Tx burst decouple period  ? acoustic start
@@ -480,8 +482,8 @@ static HAL_StatusTypeDef run_one_measurement(uint8_t tx, float  *tof_rx1_us, flo
         DEBUG("Tx%u: ToF ticks out of range (d1=%d, d2=%d) - expected %d..%d\n", tx, delta1, delta2, TOF_MIN_TICKS, TOF_MAX_TICKS);
         return HAL_ERROR;
     }
-    *tof_rx1_us = delta1;
-    *tof_rx2_us = delta2;
+		*tof_rx1_ticks = (float)delta1;   /* ticks, 100 ns resolution */
+		*tof_rx2_ticks = (float)delta2;   /* ticks, 100 ns resolution */
     return HAL_OK;
 }
 
@@ -494,13 +496,14 @@ static HAL_StatusTypeDef run_one_measurement(uint8_t tx, float  *tof_rx1_us, flo
  * @return HAL status.
  */
 static HAL_StatusTypeDef store_path_to_eeprom(uint8_t sensorID, float path_um) {
-    uint8_t bytes[4];
-    memcpy(bytes, &path_um, 4);
-    for (uint8_t i = 0u; i < 4; i++) {
-        if (PGA460_RegisterWrite(sensorID, (uint8_t)(REG_USER_DATA1 + i), bytes[i]) != HAL_OK) {
-            DEBUG("Sensor %u: failed to write calibration byte %u\n", sensorID, i);
-            return HAL_ERROR;
-        }
+    EEImage_t *ee = PGA460_GetEEData(sensorID);
+    if (ee == NULL) return HAL_ERROR;
+
+    memcpy(&ee->UserData[0], &path_um, sizeof(float));
+
+    if (PGA460_EEPROMBulkWrite(sensorID) != HAL_OK) {
+        DEBUG("Sensor %u: EEPROM bulk write failed during calibration store\n", sensorID);
+        return HAL_ERROR;
     }
     return HAL_OK;
 }
@@ -514,21 +517,14 @@ static HAL_StatusTypeDef store_path_to_eeprom(uint8_t sensorID, float path_um) {
  * @return Calibrated path length in um, or NOMINAL_PATH_UM if not stored or invalid.
  */
 static float load_path_from_eeprom(uint8_t sensorID) {
-    uint8_t bytes[4] = {0, 0, 0, 0};
-    uint8_t val;
-    for (uint8_t i = 0u; i < 4; i++) {
-        if (PGA460_RegisterRead(sensorID, (uint8_t)(REG_USER_DATA1 + i), &val) != HAL_OK) {
-            DEBUG("Sensor %u: failed to read calibration byte %u\n", sensorID, i);
-            return NOMINAL_PATH_UM;
-        }
-        bytes[i] = val;
-    }
+    EEImage_t *ee = PGA460_GetEEData(sensorID);
+    if (ee == NULL) return NOMINAL_PATH_UM;
+
     float result;
-    memcpy(&result, bytes, 4);
-    /* Sanity check: must be within *10% of nominal */
+    memcpy(&result, &ee->UserData[0], sizeof(float));
+
     if (result < NOMINAL_PATH_UM * 0.90f || result > NOMINAL_PATH_UM * 1.10f) {
-        DEBUG("Sensor %u: EEPROM path length %.1f um out of range, using nominal\n",
-              sensorID, result);
+        DEBUG("Sensor %u: EEPROM path %.1f um out of range, using nominal\n", sensorID, result);
         return NOMINAL_PATH_UM;
     }
     return result;
@@ -540,31 +536,20 @@ static float load_path_from_eeprom(uint8_t sensorID) {
  *          result in g_pathLen_um[].  Falls back to NOMINAL_PATH_UM on failure.
  *          Call once at boot after Wind_Init() so prior calibrations survive power-off.
  */
-void Wind_LoadCalibration(void)
-{
+void Wind_LoadCalibration(void) {
     for (uint8_t i = 0; i < 3; i++) {
         g_pathLen_um[i] = load_path_from_eeprom(i);
         DEBUG("Sensor %u: loaded D = %.2f um\n", i, g_pathLen_um[i]);
     }
 }
 
-/**
- * @brief Wind_UpdateEnvironment function implementation.
- * @details Writes tempC, rh, hPa, and height_m into externalData and calls
- *          Wind_ComputeSoundSpeed() to refresh externalData.SoundSpeed.
- *          Call whenever BMP581, HDC302x, or GPS data is refreshed.
- * @param tempC  Ambient temperature in degrees Celsius.
- * @param rh  Relative humidity in %.
- * @param hPa  Atmospheric pressure in hPa.
- * @param height_m  Altitude in metres above sea level (0 = estimate from pressure).
- */
-void Wind_UpdateEnvironment(float tempC, float rh, float hPa, float height_m) {
-	externalData.Temperature = tempC;
-	externalData.RH          = rh;
-	externalData.Pressure    = hPa;
-	externalData.Height      = height_m;
-	/* Recompute speed of sound and store in externalData.SoundSpeed */
-	Wind_ComputeSoundSpeed(&externalData);
+void Wind_Init(void) {
+	ResetFilter();
+	Wind_LoadCalibration();
+	HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_1, (uint32_t *)&ToF_Result[0].E0, 2);
+	HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_2, (uint32_t *)&ToF_Result[1].E0, 2);
+	HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_3, (uint32_t *)&ToF_Result[2].E0, 2);
+	__HAL_TIM_DISABLE(&htim2);
 }
 
 /**
@@ -591,7 +576,7 @@ HAL_StatusTypeDef Wind_CalibrateReflector(float soundSpeed_ms, uint8_t burnEEPRO
     DEBUG("Calibration start: c = %.4f m/s, N_CAL = %u\n", c, N_CAL);
     /*
      * Accumulators for the six one-way ToF sums (us).
-     * Index mapping mirrors the tof[tx][rx_slot] layout in Wind_MeasureWind.
+     * Index mapping mirrors the tof[tx][rx_slot] layout in Wind_Measure.
      *   sum[0][0] = S t_01,  sum[0][1] = S t_02
      *   sum[1][0] = S t_10,  sum[1][1] = S t_12
      *   sum[2][0] = S t_20,  sum[2][1] = S t_21
@@ -638,13 +623,13 @@ HAL_StatusTypeDef Wind_CalibrateReflector(float soundSpeed_ms, uint8_t burnEEPRO
      *   D_20  stored in sensor 2  (t_20 = sum[2][0], t_02 = sum[0][1])
      */
     /* Average ToF per pair (us) */
-    float t_avg_01 = (sum[0][0] + sum[1][0]) * 0.5f * inv_valid;
-    float t_avg_12 = (sum[1][1] + sum[2][1]) * 0.5f * inv_valid;
-    float t_avg_20 = (sum[2][0] + sum[0][1]) * 0.5f * inv_valid;
+		float t_avg_01 = (sum[0][0] + sum[1][0]) * 0.5f * inv_valid;
+		float t_avg_12 = (sum[1][1] + sum[2][1]) * 0.5f * inv_valid;
+		float t_avg_20 = (sum[2][0] + sum[0][1]) * 0.5f * inv_valid;
     float d[3];
-    d[0] = c * t_avg_01;   /* D_01 um, owned by sensor 0 */
-    d[1] = c * t_avg_12;   /* D_12 um, owned by sensor 1 */
-    d[2] = c * t_avg_20;   /* D_20 um, owned by sensor 2 */
+    d[0] = c * t_avg_01 / TICKS_PER_US;   /* D_01 um, owned by sensor 0 */
+    d[1] = c * t_avg_12 / TICKS_PER_US;   /* D_12 um, owned by sensor 1 */
+    d[2] = c * t_avg_20 / TICKS_PER_US;   /* D_20 um, owned by sensor 2 */
     for (uint8_t i = 0; i < 3; i++) {
         g_pathLen_um[i] = d[i];
         DEBUG("D_%u%u = %.2f um  (%.4f mm, nominal %.2f um, delta %+.1f um, %u samples)\n", i, (i + 1) % 3, d[i], d[i] * 0.001f, NOMINAL_PATH_UM, d[i] - NOMINAL_PATH_UM, valid);
@@ -664,7 +649,7 @@ HAL_StatusTypeDef Wind_CalibrateReflector(float soundSpeed_ms, uint8_t burnEEPRO
 }
 
 /**
- * @brief Wind_MeasureWind function implementation.
+ * @brief Wind_Measure function implementation.
  * @details Executes a full 3-transmitter measurement cycle and returns the filtered wind vector.
  *
  *          Step 1 - Hardware cycle: fires each transmitter, captures 6 raw one-way ToF
@@ -759,12 +744,12 @@ HAL_StatusTypeDef Wind_Measure(Wind_t *out) {
 
     /* Guard: if any median is still zero the buffer was never populated */
 
-    if (t01 < TOF_MIN_US || t01 > TOF_MAX_US ||
-        t10 < TOF_MIN_US || t10 > TOF_MAX_US ||
-        t12 < TOF_MIN_US || t12 > TOF_MAX_US ||
-        t21 < TOF_MIN_US || t21 > TOF_MAX_US ||
-        t20 < TOF_MIN_US || t20 > TOF_MAX_US ||
-        t02 < TOF_MIN_US || t02 > TOF_MAX_US)
+    if (t01 < TOF_MIN_TICKS || t01 > TOF_MAX_TICKS ||
+        t10 < TOF_MIN_TICKS || t10 > TOF_MAX_TICKS ||
+        t12 < TOF_MIN_TICKS || t12 > TOF_MAX_TICKS ||
+        t21 < TOF_MIN_TICKS || t21 > TOF_MAX_TICKS ||
+        t20 < TOF_MIN_TICKS || t20 > TOF_MAX_TICKS ||
+        t02 < TOF_MIN_TICKS || t02 > TOF_MAX_TICKS)
     {
         DEBUG("MeasureWind: median ToF out of physical range -- buffer not yet warm\n");
         return HAL_ERROR;
@@ -779,9 +764,9 @@ HAL_StatusTypeDef Wind_Measure(Wind_t *out) {
      * u_ij = (pos_j - pos_i) / L.  The units work out to m/s because
      * D_i is in um and t_ij is in us, and 1 um/us = 1 m/s exactly.
      *=========================================================================*/
-    float b01 = (g_pathLen_um[0] * 0.5f) * (1.0f/t01 - 1.0f/t10);
-    float b12 = (g_pathLen_um[1] * 0.5f) * (1.0f/t12 - 1.0f/t21);
-    float b20 = (g_pathLen_um[2] * 0.5f) * (1.0f/t20 - 1.0f/t02);
+		float b01 = (g_pathLen_um[0] * TICKS_HALF) * (1.0f/t01 - 1.0f/t10);
+		float b12 = (g_pathLen_um[1] * TICKS_HALF) * (1.0f/t12 - 1.0f/t21);
+		float b20 = (g_pathLen_um[2] * TICKS_HALF) * (1.0f/t20 - 1.0f/t02);
     DEBUG("b01=%.4f b12=%.4f b20=%.4f m/s\n", b01, b12, b20);
     /*
      * Closed-form least-squares reconstruction (K = 20/9, exact for 120 deg layout):
@@ -801,8 +786,8 @@ HAL_StatusTypeDef Wind_Measure(Wind_t *out) {
      * No circular-mean issue: direction is computed from the (vx,vy) vector
      * which was reconstructed from median ToFs -- no 0/360 wraparound problem.
      *=========================================================================*/
-    float speed = cordic_magnitude(vx * CORDIC_INV, vy * CORDIC_INV) * CORDIC_SCALE;
-    float angle_to = cordic_atan2_deg(vx, vy);   /* TO direction [-180,+180) */
+    float speed = cordic_magnitude(vx, vy);
+    float angle_to = cordic_atan2_deg(vy, vx);   // North=y, East=x
     float dir_from = angle_to + 180.0f;
     if (dir_from >= 360.0f) { dir_from -= 360.0f; }
     if (dir_from <    0.0f) { dir_from += 360.0f; }
