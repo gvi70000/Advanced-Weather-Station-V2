@@ -129,7 +129,7 @@ HAL_StatusTypeDef BMP581_Init(void) {
     }
 		BMP581_ReadAllRegisters();
 		
-		bmp581_regs.ODR_CONFIG.Val.BitField.odr      = BMP581_ODR_0_5_HZ;
+		bmp581_regs.ODR_CONFIG.Val.BitField.odr      = BMP581_ODR_1_HZ;
     bmp581_regs.ODR_CONFIG.Val.BitField.pwr_mode = BMP581_PWRMODE_STANDBY;
     bmp581_regs.ODR_CONFIG.Val.BitField.deep_dis = BMP581_DEEP_DISABLED;
     if (BMP581_Set_ODRConfig() != HAL_OK) {
@@ -204,7 +204,7 @@ HAL_StatusTypeDef BMP581_Init(void) {
 
     // Step 12: Start measurements — ODR and power mode set last per Bosch API examples.
     // 1 Hz is valid for 1x+1x OSR (t_meas ~1 ms << 1000 ms period).
-		bmp581_regs.ODR_CONFIG.Val.BitField.odr      = BMP581_ODR_0_5_HZ;
+		bmp581_regs.ODR_CONFIG.Val.BitField.odr      = BMP581_ODR_1_HZ;
 		bmp581_regs.ODR_CONFIG.Val.BitField.pwr_mode = BMP581_PWRMODE_NORMAL;
 		bmp581_regs.ODR_CONFIG.Val.BitField.deep_dis = BMP581_DEEP_DISABLED;
     if (BMP581_Set_ODRConfig() != HAL_OK) {
