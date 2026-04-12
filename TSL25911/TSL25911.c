@@ -64,41 +64,39 @@ static inline HAL_StatusTypeDef TSL25911_ReadRegister(uint8_t reg, uint8_t* data
 HAL_StatusTypeDef TSL25911_Init(void) {
     // Step 1: Get and validate chip ID
     if (TSL25911_ReadID() != HAL_OK || TSL25911_Sensor.ID != TSL25911_ID) {
-        return HAL_ERROR; // Invalid chip ID
+        return HAL_ERROR;
     }
 
     // Step 2: Power ON the oscillator by setting the PON bit
     if (TSL25911_Enable(TSL25911_STATE_PON) != HAL_OK) {
-        return HAL_ERROR; // Failed to set PON
+        return HAL_ERROR;
     }
-		HAL_Delay(10);  // Wait for oscillator stabilization
-		
+    HAL_Delay(10);  // Wait for oscillator stabilization
+
     // Step 3: Configure gain and integration time
+    // 500 ms x 2 persist cycles = 1000 ms interrupt period
     if (TSL25911_SetGainAndIntegrationTime(TSL25911_GAIN_LOW, TSL25911_INTEGRATION_600MS) != HAL_OK) {
-        return HAL_ERROR; // Failed to set gain and integration time
+        return HAL_ERROR;
     }
 
-		
-    // Step 5: Configure ALS interrupt thresholds
-    if (TSL25911_SetInterruptThresholds(TSL25911_SET_MID, TSL25911_SET_MID) != HAL_OK) {
-        return HAL_ERROR; // Failed to set interrupt thresholds
+    // Step 4: Configure ALS interrupt thresholds
+    // Both set to 0xFFFF so every reading is always out of range,
+    // guaranteeing an interrupt fires every persist cycle
+    if (TSL25911_SetInterruptThresholds(0xFFFF, 0xFFFF) != HAL_OK) {
+        return HAL_ERROR;
     }
 
-
+    // Step 5: Set persistence to 2 cycles: 2 x 500 ms = ~1000 ms interrupt rate
     if (TSL25911_SetPersistence(TSL25911_PERSIST_2_CYCLES) != HAL_OK) {
         return HAL_ERROR;
     }
-		
+
     // Step 6: Enable ALS and ALS interrupts
-		TSL25911_Sensor.ENABLE.Val.Value = TSL25911_STATE_PON_AEN_AIEN;
-//		TSL25911_Sensor.ENABLE.Val.BitField.PON = 1; // Power ON
-//		TSL25911_Sensor.ENABLE.Val.BitField.AEN = 1; // ALS Enable
-//		TSL25911_Sensor.ENABLE.Val.BitField.AIEN = 1; // ALS Interrupt Enable
     if (TSL25911_Enable(TSL25911_STATE_PON_AEN_AIEN) != HAL_OK) {
-        return HAL_ERROR; // Failed to set PON
+        return HAL_ERROR;
     }
 
-    return HAL_OK; // Initialization successful
+    return HAL_OK;
 }
 
 /**
@@ -208,27 +206,34 @@ HAL_StatusTypeDef TSL25911_ClearInterrupt(TSL25911_SpecialFunction_t interrupt) 
  * @return HAL_OK if successful, HAL_ERROR otherwise.
  */
 HAL_StatusTypeDef TSL25911_ReadLightData(TSL25911_LightData_t *lightData) {
-    // Step 1: Read the status register to verify data validity using TSL25911_GetStatus
+    /* Step 1: Read the status register to verify data validity */
     if (TSL25911_GetStatus() != HAL_OK) {
-        return HAL_ERROR; // Status read operation failed
+        return HAL_ERROR; // I2C communication failure
     }
 
+    /* Check if the RGBC/ALS cycle has completed (AVALID bit) */
     if (!TSL25911_Sensor.STATUS.Val.BitField.AVALID) {
-        return HAL_ERROR; // Data not valid
+        /* CRITICAL: Clear the interrupt even if data is not valid. 
+         * This ensures the sensor triggers a new cycle and the INT pin 
+         * releases, preventing the sensor from reporting no more data. */
+        TSL25911_ClearInterrupt(TSL25911_SPECIAL_FUNCTION_CLEAR_ALS_INT);
+        return HAL_BUSY; 
     }
 
-    // Step 2: Read raw light data directly into the mapped data structure using ReadRegister
+    /* Step 2: Read raw light data directly into the mapped data structure */
     if (TSL25911_ReadRegister(TSL25911_REG_C0DATA, TSL25911_Sensor.DATA.Array, sizeof(TSL25911_Sensor.DATA.Array)) != HAL_OK) {
         return HAL_ERROR; // I2C read operation failed
     }
 
-    // Step 3: Map raw data to the light data structure
+    /* Step 3: Map raw data to the light data structure */
     lightData->FullSpectrum = TSL25911_Sensor.DATA.Channels.CH0.Value;
     lightData->Infrared = TSL25911_Sensor.DATA.Channels.CH1.Value;
-    lightData->Visible = lightData->FullSpectrum - lightData->Infrared;
+    lightData->Visible = (lightData->FullSpectrum > lightData->Infrared) ? (lightData->FullSpectrum - lightData->Infrared) : 0;
 
-    // Step 4: Calculate lux based on integration time, gain, and raw data
+    /* Step 4: Calculate lux based on integration time, gain, and raw data */
     float atime, again, cpl;
+    
+    // Determine Integration Time (ATIME)
     switch (TSL25911_Sensor.CTRL.Val.BitField.ATIME) {
         case TSL25911_INTEGRATION_100MS: atime = 100.0F; break;
         case TSL25911_INTEGRATION_200MS: atime = 200.0F; break;
@@ -239,29 +244,34 @@ HAL_StatusTypeDef TSL25911_ReadLightData(TSL25911_LightData_t *lightData) {
         default: atime = 100.0F; break;
     }
 
+    // Determine Gain (AGAIN)
     switch (TSL25911_Sensor.CTRL.Val.BitField.AGAIN) {
-        case TSL25911_GAIN_LOW:		again = 1.0F; break;
-				case TSL25911_GAIN_MED:		again = 24.5F; break;
-				case TSL25911_GAIN_HIGH:	again = 400.0F; break;
-				case TSL25911_GAIN_MAX:		again = 9200.0F; break;
+        case TSL25911_GAIN_LOW:  again = 1.0F; break;
+        case TSL25911_GAIN_MED:  again = 24.5F; break;
+        case TSL25911_GAIN_HIGH: again = 400.0F; break;
+        case TSL25911_GAIN_MAX:  again = 9200.0F; break;
         default: again = 1.0F; break;
     }
 
+    // Check for sensor saturation/overflow
     if (lightData->FullSpectrum == 0xFFFF || lightData->Infrared == 0xFFFF) {
-        return HAL_ERROR; // Overflow detected
+        /* Clear interrupt before exiting on overflow */
+        TSL25911_ClearInterrupt(TSL25911_SPECIAL_FUNCTION_CLEAR_ALS_INT);
+        return HAL_ERROR; 
     }
 
+    // Final Lux Calculation
     if (lightData->FullSpectrum == 0) {
-			lightData->Lux = 0.0F;
-		} else {
-				cpl = (atime * again) / TSL25911_LUX_DF;
-				lightData->Lux = (((float)lightData->Visible) * (1.0F - ((float)lightData->Infrared / (float)lightData->FullSpectrum))) / cpl;
-		}
+        lightData->Lux = 0.0F;
+    } else {
+        cpl = (atime * again) / TSL25911_LUX_DF;
+        lightData->Lux = (((float)lightData->Visible) * (1.0F - ((float)lightData->Infrared / (float)lightData->FullSpectrum))) / cpl;
+    }
 
-    // Step 5: Clear the ALS interrupt if it is set
-		if (TSL25911_ClearInterrupt(TSL25911_SPECIAL_FUNCTION_CLEAR_ALS_INT) != HAL_OK) {
-			return HAL_ERROR; // Failed to clear interrupt
-		}
+    /* Step 5: Clear the ALS interrupt after a successful read */
+    if (TSL25911_ClearInterrupt(TSL25911_SPECIAL_FUNCTION_CLEAR_ALS_INT) != HAL_OK) {
+        return HAL_ERROR;
+    }
 
     return HAL_OK;
 }
