@@ -4,62 +4,62 @@
  *
  * Functions
  * ---------
- *  1. Receives binary UART_Frame_t packets from STM32G431 (UART1) and
- *     publishes all fields as JSON to an MQTT broker via PoE Ethernet.
+ *  1. Receives binary UART_Frame_t packets from STM32G431 (Serial1) and
+ *     publishes every field as a plain scalar string on its own MQTT topic
+ *     via PoE Ethernet.
  *  2. Receives NMEA / PQTM messages from a Quectel LG290P RTK GNSS module
- *     (UART2) via the SparkFun LG290P library and publishes position,
- *     fix quality, and RTK status to a separate MQTT topic.
- *  3. Monitors PA11 (STM RX-busy) and PA12 (STM TX-busy) to allow future
- *     upstream commands to the STM (currently a stub – see Q3 answer below).
+ *     (Serial2) via the SparkFun LG290P library and publishes position,
+ *     fix quality, and RTK status as individual MQTT topics.
+ *  3. Handshake lines between ESP and STM32:
+ *       GPIO35 (input)  <- STM PA11  HIGH while STM is TRANSMITTING to ESP
+ *       GPIO13 (output) -> STM PA12  driven LOW while ESP is TRANSMITTING to STM
+ *                         (2.2 kOhm pull-up on STM side; idle = HIGH)
+ *  4. ArduinoOTA: firmware can be pushed wirelessly from Arduino IDE / CLI
+ *     once the board has an IP address.  OTA password is set below.
  *
  * ──────────────────────────────────────────────────────────────────────────
  * HARDWARE PIN MAP  (ESP32 GPIO numbers)
  * ──────────────────────────────────────────────────────────────────────────
- *  GPIO36 (input-only)  ← STM PA9  Tx  (STM→ESP UART RX)       Serial1 RX
- *  GPIO4                → STM PA10 Rx  (ESP→STM UART TX)       Serial1 TX
- *  GPIO35 (input-only)  ← STM PA11     "STM is transmitting"   sense pin
- *  GPIO13 HIGH Default  → STM PA12 INT "ESP is transmitting"   signal pin
+ *  GPIO36 (input-only)  <- STM PA9  Tx  (STM->ESP UART data)   Serial1 RX
+ *                                                               10 kOhm pull-up
+ *  GPIO4                -> STM PA10 Rx  (ESP->STM UART data)   Serial1 TX
+ *  GPIO35 (input-only)  <- STM PA11    HIGH = STM transmitting  sense pin
+ *  GPIO13               -> STM PA12 EXTI  LOW = ESP transmitting
+ *                                               2.2 kOhm pull-up, idle HIGH
  *
- *  GPI34  (input-only)  ← LG290P Tx  (GPS→ESP)                 Serial2 RX
- *  GPIO32				 → LG290P Rx  (GPS→ESP)					Serial2 TX
- * ──────────────────────────────────────────────────────────────────────────
- *  STM32: The STM only listens for upstream commands via PA12 EXTI.  In this
- *  firmware there are no control messages sent to the STM; PA12 / GPIO33 is
- *  driven HIGH while Serial1.write() is active (stub provided: sendToSTM()).
- *
- *  LG290P: RTCM3 correction bytes from an NTRIP caster should be forwarded
- *  to the GPS via Serial2 to achieve RTK Fix.  A lightweight NTRIP client
- *  stub (NtripClient) is included; fill in NTRIP_HOST / PORT / MOUNTPOINT /
- *  NTRIP_USER / NTRIP_PASS and call ntripLoop() from loop().
+ *  GPIO34 (input-only)  <- LG290P Tx  (GPS->ESP)               Serial2 RX
+ *  GPIO32               -> LG290P Rx  (ESP->GPS, RTCM/cmds)    Serial2 TX
+ *  GPIO5                -> LG290P RESET_N   10 kOhm pull-up, active-LOW
+ *                          P2 connector: VCC, GND, Tx, Rx, RST, 1PPS
  *
  * ──────────────────────────────────────────────────────────────────────────
- * DEPENDENCIES (install via Arduino Library Manager)
+ * IMPORTANT NOTES
  * ──────────────────────────────────────────────────────────────────────────
- *  • SparkFun LG290P Quadband RTK GNSS Arduino Library  (>= v3.0.0)
- *  • PubSubClient  by Nick O'Leary                       (>= 2.8)
- *  • ArduinoJson   by Benoit Blanchon                    (>= 7.x)
+ *  - GPIO16 / GPIO17 are used by the WROVER PSRAM – do NOT assign them.
+ *  - GPIO0  is used by the LAN8720 Ethernet clock  – do NOT assign it.
+ *  - GPIO35 maps to the Olimex battery-voltage sense pin (SENS_BAT_E1
+ *    solder jumper).  If the jumper is closed, UART-level use is still safe
+ *    (input-only) but the ADC reading will reflect UART levels, not battery.
+ *
+ * ──────────────────────────────────────────────────────────────────────────
+ * DEPENDENCIES  (install via Arduino Library Manager)
+ * ──────────────────────────────────────────────────────────────────────────
+ *  - SparkFun LG290P Quadband RTK GNSS Arduino Library  (>= v3.0.0)
+ *  - PubSubClient  by Nick O'Leary                       (>= 2.8)
  *
  * ARDUINO IDE SETTINGS
- *  Board  : ESP32 Dev Module   (or "Olimex ESP32-POE2" if available)
- *  PSRAM  : Enabled            ← mandatory for WROVER
- *  Flash  : 4MB
- *  Part.  : Default (or your custom scheme)
+ *  Board      : ESP32 Dev Module  (or "Olimex ESP32-POE2" if listed)
+ *  PSRAM      : Enabled           <- mandatory for WROVER
+ *  Flash size : 4 MB
+ *  Partition  : Default 4MB with spiffs  (OTA needs two app partitions)
  *
  * ──────────────────────────────────────────────────────────────────────────
  * MIT Licence – adapt freely.
  * ──────────────────────────────────────────────────────────────────────────
- * https://www.centipede-rtk.org/projects
- * https://learn.sparkfun.com/tutorials/how-to-build-a-diy-gnss-reference-station/all
- * https://gpsd.gitlab.io/gpsd/ppp-howto.html
- *
- *  https://www.ngs.noaa.gov/OPUS/
- *  https://webapp.csrs-scrs.nrcan-rncan.gc.ca/geod/tools-outils/ppp.php?locale=en
- *  https://www.unoosa.org/documents/pdf/icg/2018/ait-gnss/16_PPP.pdf
- *
  */
 
 // ==========================================================================
-// ETH – must be defined BEFORE #include <ETH.h>
+// ETH – PHY settings MUST be defined before #include <ETH.h>
 // ==========================================================================
 #ifndef ETH_PHY_TYPE
   #define ETH_PHY_TYPE   ETH_PHY_LAN8720
@@ -71,69 +71,111 @@
 #endif
 
 #include <ETH.h>
+#include <ArduinoOTA.h>
 #include <PubSubClient.h>
-#include <ArduinoJson.h>
-#include <SparkFun_LG290P_GNSS.h>   // SparkFun LG290P library
+#include <SparkFun_LG290P_GNSS.h>
 
 // ==========================================================================
-// USER CONFIGURATION
+// USER CONFIGURATION  – edit this section only
 // ==========================================================================
 
 // --- MQTT broker ---
-static const char* MQTT_SERVER   = "10.0.1.6";
-static const uint16_t MQTT_PORT  = 1883;
-static const char* MQTT_CLIENT_ID = "WeatherStation";
-// Optional broker credentials (leave empty strings if not needed)
-static const char* MQTT_USER     = "";
-static const char* MQTT_PASS     = "";
+static const char*    MQTT_SERVER    = "10.0.1.6";
+static const uint16_t MQTT_PORT      = 1883;
+static const char*    MQTT_CLIENT_ID = "WeatherStation";
+static const char*    MQTT_USER      = "";   // leave empty if not required
+static const char*    MQTT_PASS      = "";
 
-// --- MQTT topics ---
-static const char* TOPIC_ENV        = "weather/env";
-static const char* TOPIC_WIND       = "weather/wind";
-static const char* TOPIC_LIGHTNING  = "weather/lightning";
-static const char* TOPIC_UV         = "weather/uv";
-static const char* TOPIC_AIR        = "weather/air";
-static const char* TOPIC_LIGHT_RGB  = "weather/light/rgb";
-static const char* TOPIC_LIGHT_LUX  = "weather/light/lux";
-static const char* TOPIC_GPS        = "weather/gps";
-static const char* TOPIC_STATUS     = "weather/status";
+// --- OTA ---
+static const char*    OTA_HOSTNAME   = "WeatherStation";
+static const char*    OTA_PASSWORD   = "ota1234";   // change before deployment!
 
-// --- NTRIP client (fill in to get RTK corrections to GPS) ---
-static const char* NTRIP_HOST       = "";       // e.g. "ntrip.kartverket.no"
-static const uint16_t NTRIP_PORT    = 2101;
-static const char* NTRIP_MOUNTPOINT = "";       // e.g. "HFKR0"
-static const char* NTRIP_USER       = "";
-static const char* NTRIP_PASS       = "";
+// --- NTRIP (fill in to stream RTCM3 RTK corrections to the LG290P) ---
+static const char*    NTRIP_HOST       = "";   // e.g. "ntrip.example.com"
+static const uint16_t NTRIP_PORT       = 2101;
+static const char*    NTRIP_MOUNTPOINT = "";   // e.g. "NEAREST0"
+static const char*    NTRIP_USER       = "";
+static const char*    NTRIP_PASS       = "";
+
+// ==========================================================================
+// MQTT TOPICS  – one plain scalar value per topic
+// ==========================================================================
+
+// Environmental
+static const char* TOPIC_TEMP      = "weather/Temperature";       // float  degrees C
+static const char* TOPIC_RH        = "weather/RH";                // float  %
+static const char* TOPIC_PRES      = "weather/Pressure";          // float  hPa
+static const char* TOPIC_SP        = "weather/SoundSpeed";        // float  m/s
+static const char* TOPIC_DP        = "weather/DewPoint";          // float  degrees C
+
+// UV (AS7331)
+static const char* TOPIC_UVT       = "weather/UVTemperature";     // uint16 (degrees C x 100)
+static const char* TOPIC_UVA       = "weather/UVA";               // uint16 counts
+static const char* TOPIC_UVB       = "weather/UVB";               // uint16 counts
+static const char* TOPIC_UVC       = "weather/UVC";               // uint16 counts
+
+// Colour light (TCS34003)
+static const char* TOPIC_LIGHT_C   = "weather/ClearChannel";      // uint16
+static const char* TOPIC_LIGHT_R   = "weather/RedChannel";        // uint16
+static const char* TOPIC_LIGHT_G   = "weather/GreenChannel";      // uint16
+static const char* TOPIC_LIGHT_B   = "weather/BlueChannel";       // uint16
+
+// Broad-spectrum light (TSL25911)
+static const char* TOPIC_LIGHT_FS  = "weather/FullSpectrum";      // uint16
+static const char* TOPIC_LIGHT_IR  = "weather/Infrared";          // uint16
+static const char* TOPIC_LIGHT_VI  = "weather/Visible";           // uint16
+static const char* TOPIC_LIGHT_LX  = "weather/Lux";               // float
+
+// Air quality (ENS160)
+static const char* TOPIC_AQI       = "weather/AQI";               // uint8  1-5
+static const char* TOPIC_TVOC      = "weather/TVOC";              // uint16 ppb
+static const char* TOPIC_ECO       = "weather/eCO2";              // uint16 ppm
+
+// Wind (PGA460)
+static const char* TOPIC_WS        = "weather/WindSpeed";         // float  m/s
+static const char* TOPIC_WD        = "weather/WindDirection";     // float  degrees
+
+// Lightning (AS3935)
+static const char* TOPIC_LE        = "weather/LightningEnergy";   // uint32
+static const char* TOPIC_LD        = "weather/DistanceEstimation";// uint8
+
+// Housekeeping
+static const char* TOPIC_STATUS    = "weather/status";            // "online" / "offline"
 
 // ==========================================================================
 // PIN DEFINITIONS
 // ==========================================================================
 
-// --- STM32 UART (Serial1) ---
-#define PIN_STM_RX   36   // GPIO36 input-only  ← STM PA09 Tx 10k PullUp
-#define PIN_STM_TX    4   // GPIO4              → STM PA10 Rx
+// STM32 UART  (Serial1)
+#define PIN_STM_RX      36   // GPIO36  input-only  <- STM PA9  Tx  (10 kOhm pull-up)
+#define PIN_STM_TX       4   // GPIO4               -> STM PA10 Rx
 
-// --- STM32 handshake signals ---
-#define PIN_STM_IS_TX   35  // GPI35 input-only – HIGH when STM is receiving. Map to Battery. Jumper Open.
-#define PIN_ESP_IS_TX   13  // GPIO13 output     – drive HIGH while ESP Tx-ing Has 2.2k PullUp
+// STM32 handshake
+#define PIN_STM_IS_TX   35   // GPIO35  input-only  <- STM PA11
+                             //   HIGH while STM is transmitting to ESP
+#define PIN_ESP_IS_TX   13   // GPIO13  output      -> STM PA12 EXTI
+                             //   driven LOW while ESP is transmitting to STM
+                             //   2.2 kOhm pull-up on STM side; idle = HIGH
 
-// --- LG290P GNSS UART (Serial2) ---
-#define PIN_GPS_RX   34   // GPI39   ← LG290P Tx
-#define PIN_GPS_TX   32   // GPIO32  → LG290P Rx
-#define PIN_GPS_RST  5    // GPIO5   → LG290P RESET_N 10k PullUp
-// Use P2 connector: VCC, GND, Tx, Rx, RST, 1PPS
+// LG290P GNSS  (Serial2)
+#define PIN_GPS_RX      34   // GPIO34  input-only  <- LG290P Tx
+#define PIN_GPS_TX      32   // GPIO32              -> LG290P Rx
+#define PIN_GPS_RST      5   // GPIO5               -> LG290P RESET_N (10 kOhm pull-up, active-LOW)
 
 // ==========================================================================
-// FRAME DEFINITIONS  (must match STM32 structs exactly)
+// FRAME STRUCTURES  – must match the STM32 packed structs byte-for-byte
+//
+// NOTE: ENS160_Data_t  has no Raw[5] field here  (STM does not transmit it).
+//       TCS34003_LightData_t has no FullArray[8]  (same reason).
+//       Both structs are exact mirrors of what the STM sends in UART_Payload_t.
 // ==========================================================================
 
-#define UART_FRAME_START  0xAA55
-#define UART_FRAME_SOF_B0 0x55   // little-endian low byte of 0xAA55
-#define UART_FRAME_SOF_B1 0xAA   // high byte
+#define UART_FRAME_START  0xAA55u
+#define UART_FRAME_SOF_B0 0x55u   // little-endian byte 0 of 0xAA55
+#define UART_FRAME_SOF_B1 0xAAu   // little-endian byte 1
 
-// Environmental / wind data mirrored from stm32 Wind_EnvData_t
 struct Wind_EnvData_t {
-    float Temperature;   // °C
+    float Temperature;   // degrees C
     float RH;            // %
     float Pressure;      // hPa
     float SoundSpeed;    // m/s
@@ -141,26 +183,25 @@ struct Wind_EnvData_t {
 
 struct Wind_t {
     float Speed;         // m/s
-    float Direction;     // degrees
+    float Direction;     // degrees FROM  (0/360=N, 90=E, 180=S, 270=W)
 } __attribute__((packed));
 
 struct AS3935_LightningData_t {
-    uint32_t LightningEnergy;      // 20-bit raw
-    uint8_t  DistanceEstimation;   // code
+    uint32_t LightningEnergy;    // 20-bit raw energy
+    uint8_t  DistanceEstimation; // distance code
 } __attribute__((packed));
 
 struct AS7331_DataOut_t {
-    uint16_t TEMP_C100;  // °C * 100
+    uint16_t TEMP_C100;  // die temperature x 100
     uint16_t UVA;
     uint16_t UVB;
     uint16_t UVC;
 } __attribute__((packed));
 
 struct ENS160_Data_t {
-    uint8_t  AQI;    // 1..5
-    uint16_t TVOC;   // ppb
-    uint16_t eCO2;   // ppm
-    uint8_t  Raw[5];
+    uint8_t  AQI;        // Air Quality Index 1-5
+    uint16_t TVOC;       // ppb
+    uint16_t eCO2;       // ppm
 } __attribute__((packed));
 
 struct TCS34003_LightData_t {
@@ -168,7 +209,6 @@ struct TCS34003_LightData_t {
     uint16_t RedChannel;
     uint16_t GreenChannel;
     uint16_t BlueChannel;
-    uint8_t  FullArray[8];
 } __attribute__((packed));
 
 struct TSL25911_LightData_t {
@@ -179,35 +219,35 @@ struct TSL25911_LightData_t {
 } __attribute__((packed));
 
 struct UART_Payload_t {
-    Wind_EnvData_t       Env;
-    float                DewPoint;
+    Wind_EnvData_t         Env;
+    float                  DewPoint;
     AS3935_LightningData_t Lightning;
-    AS7331_DataOut_t     UV;
-    ENS160_Data_t        AirQuality;
-    TCS34003_LightData_t LightRGB;
-    TSL25911_LightData_t Light;
-    Wind_t               Wind;
+    AS7331_DataOut_t       UV;
+    ENS160_Data_t          AirQuality;
+    TCS34003_LightData_t   LightRGB;
+    TSL25911_LightData_t   Light;
+    Wind_t                 Wind;
 } __attribute__((packed));
 
 struct UART_Frame_t {
-    uint16_t Start;    // 0xAA55
-    uint16_t Length;   // sizeof(UART_Payload_t)
+    uint16_t       Start;    // 0xAA55
+    uint16_t       Length;   // sizeof(UART_Payload_t)
     UART_Payload_t Payload;
-    uint16_t CR;       // CRC16
+    uint16_t       CR;       // CRC-16
 } __attribute__((packed));
 
 static constexpr size_t FRAME_SIZE = sizeof(UART_Frame_t);
 
 // ==========================================================================
-// CRC-16 (Modbus/CRC16-IBM – same algorithm as STM side)
+// CRC-16  (Modbus / CRC16-IBM  polynomial 0xA001)
+// Must match the STM32 CRC16() implementation exactly.
 // ==========================================================================
 static uint16_t CRC16(const uint8_t* data, uint16_t len) {
-    uint16_t crc = 0xFFFF;
+    uint16_t crc = 0xFFFFu;
     for (uint16_t i = 0; i < len; i++) {
         crc ^= data[i];
         for (uint8_t j = 0; j < 8; j++) {
-            if (crc & 1) crc = (crc >> 1) ^ 0xA001;
-            else         crc >>= 1;
+            crc = (crc & 1u) ? ((crc >> 1) ^ 0xA001u) : (crc >> 1);
         }
     }
     return crc;
@@ -218,34 +258,68 @@ static uint16_t CRC16(const uint8_t* data, uint16_t len) {
 // ==========================================================================
 
 static bool eth_connected = false;
+static bool otaStarted    = false;   // ArduinoOTA.begin() deferred until IP ready
 
-// Networking
 WiFiClient   ethClient;
-WiFiClient   ntripEthClient;
 PubSubClient mqtt(ethClient);
 
-// GPS
+WiFiClient      ntripClient;
+static bool     ntripStreamActive = false;
+static uint32_t ntripLastAttempt  = 0;
+
 LG290P myGNSS;
 
-// STM receive buffer
+// STM32 frame receiver state machine
 static uint8_t  rxBuf[FRAME_SIZE];
-static uint16_t rxLen = 0;
+static uint16_t rxLen     = 0;
 static bool     syncFound = false;
+
+// ==========================================================================
+// MQTT PUBLISH HELPERS
+// Each overload formats its value type and calls mqtt.publish().
+// All are no-ops when the broker is not connected.
+// ==========================================================================
+static void pub(const char* topic, const char* value, bool retain = false) {
+    if (mqtt.connected()) {
+        mqtt.publish(topic, value, retain);
+    }
+}
+
+static void pub(const char* topic, float v, uint8_t dec = 2) {
+    char buf[24];
+    dtostrf(v, 1, dec, buf);
+    pub(topic, buf);
+}
+
+static void pub(const char* topic, double v, uint8_t dec = 8) {
+    char buf[32];
+    dtostrf(v, 1, dec, buf);
+    pub(topic, buf);
+}
+
+static void pub(const char* topic, uint32_t v) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)v);
+    pub(topic, buf);
+}
+
+static void pub(const char* topic, uint16_t v) { pub(topic, (uint32_t)v); }
+static void pub(const char* topic, uint8_t  v) { pub(topic, (uint32_t)v); }
 
 // ==========================================================================
 // ETHERNET EVENT HANDLER
 // ==========================================================================
-void onEvent(arduino_event_id_t event) {
+static void onEthEvent(arduino_event_id_t event) {
     switch (event) {
         case ARDUINO_EVENT_ETH_START:
             Serial.println("[ETH] Started");
-            ETH.setHostname("WeatherStation");
+            ETH.setHostname(OTA_HOSTNAME);
             break;
         case ARDUINO_EVENT_ETH_CONNECTED:
-            Serial.println("[ETH] Connected");
+            Serial.println("[ETH] Cable connected");
             break;
         case ARDUINO_EVENT_ETH_GOT_IP:
-            Serial.print("[ETH] IP: ");
+            Serial.print("[ETH] IP address: ");
             Serial.println(ETH.localIP());
             eth_connected = true;
             break;
@@ -263,17 +337,16 @@ void onEvent(arduino_event_id_t event) {
 }
 
 // ==========================================================================
-// MQTT
+// MQTT – reconnect with 5 s throttle
 // ==========================================================================
 static void mqttReconnect() {
     if (!eth_connected) return;
+
     static uint32_t lastAttempt = 0;
-    if (millis() - lastAttempt < 5000) return;   // throttle retries
+    if (millis() - lastAttempt < 5000UL) return;
     lastAttempt = millis();
 
-    Serial.print("[MQTT] Connecting to ");
-    Serial.print(MQTT_SERVER);
-    Serial.print("...");
+    Serial.printf("[MQTT] Connecting to %s:%u ...", MQTT_SERVER, MQTT_PORT);
 
     bool ok = (strlen(MQTT_USER) > 0)
         ? mqtt.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASS,
@@ -283,136 +356,64 @@ static void mqttReconnect() {
 
     if (ok) {
         Serial.println(" connected");
-        mqtt.publish(TOPIC_STATUS, "online", true);
+        pub(TOPIC_STATUS, "online", true);
     } else {
-        Serial.print(" failed, rc=");
-        Serial.println(mqtt.state());
+        Serial.printf(" failed (rc=%d)\n", mqtt.state());
     }
 }
 
-static void mqttPublish(const char* topic, const String& payload) {
-    if (!mqtt.connected()) return;
-    mqtt.publish(topic, payload.c_str());
-}
-
 // ==========================================================================
-// PUBLISH STM PAYLOAD
+// PUBLISH STM32 PAYLOAD – one MQTT message per sensor field
 // ==========================================================================
 static void publishPayload(const UART_Payload_t& p) {
-    // --- Environmental ---
-    {
-        JsonDocument doc;
-        doc["temp_c"]       = serialized(String(p.Env.Temperature, 2));
-        doc["rh_pct"]       = serialized(String(p.Env.RH, 2));
-        doc["pressure_hpa"] = serialized(String(p.Env.Pressure, 2));
-        doc["sound_ms"]     = serialized(String(p.Env.SoundSpeed, 2));
-        doc["dew_c"]        = serialized(String(p.DewPoint, 2));
-        String out;
-        serializeJson(doc, out);
-        mqttPublish(TOPIC_ENV, out);
-    }
-    // --- Wind ---
-    {
-        JsonDocument doc;
-        doc["speed_ms"]   = serialized(String(p.Wind.Speed, 3));
-        doc["dir_deg"]    = serialized(String(p.Wind.Direction, 1));
-        String out;
-        serializeJson(doc, out);
-        mqttPublish(TOPIC_WIND, out);
-    }
-    // --- Lightning ---
-    {
-        JsonDocument doc;
-        doc["energy"]   = p.Lightning.LightningEnergy;
-        doc["dist_code"]= p.Lightning.DistanceEstimation;
-        String out;
-        serializeJson(doc, out);
-        mqttPublish(TOPIC_LIGHTNING, out);
-    }
-    // --- UV ---
-    {
-        JsonDocument doc;
-        doc["temp_x100"] = p.UV.TEMP_C100;
-        doc["uva"]       = p.UV.UVA;
-        doc["uvb"]       = p.UV.UVB;
-        doc["uvc"]       = p.UV.UVC;
-        String out;
-        serializeJson(doc, out);
-        mqttPublish(TOPIC_UV, out);
-    }
-    // --- Air Quality ---
-    {
-        JsonDocument doc;
-        doc["aqi"]  = p.AirQuality.AQI;
-        doc["tvoc"] = p.AirQuality.TVOC;
-        doc["eco2"] = p.AirQuality.eCO2;
-        String out;
-        serializeJson(doc, out);
-        mqttPublish(TOPIC_AIR, out);
-    }
-    // --- Light RGB ---
-    {
-        JsonDocument doc;
-        doc["clear"] = p.LightRGB.ClearChannel;
-        doc["red"]   = p.LightRGB.RedChannel;
-        doc["green"] = p.LightRGB.GreenChannel;
-        doc["blue"]  = p.LightRGB.BlueChannel;
-        String out;
-        serializeJson(doc, out);
-        mqttPublish(TOPIC_LIGHT_RGB, out);
-    }
-    // --- Light Lux ---
-    {
-        JsonDocument doc;
-        doc["full"]    = p.Light.FullSpectrum;
-        doc["ir"]      = p.Light.Infrared;
-        doc["visible"] = p.Light.Visible;
-        doc["lux"]     = serialized(String(p.Light.Lux, 2));
-        String out;
-        serializeJson(doc, out);
-        mqttPublish(TOPIC_LIGHT_LUX, out);
-    }
-}
+    // Environmental
+    pub(TOPIC_TEMP, p.Env.Temperature,  2);
+    pub(TOPIC_RH,   p.Env.RH,           2);
+    pub(TOPIC_PRES, p.Env.Pressure,     2);
+    pub(TOPIC_SP,   p.Env.SoundSpeed,   2);
+    pub(TOPIC_DP,   p.DewPoint,         2);
 
-// ==========================================================================
-// PUBLISH GPS
-// ==========================================================================
-static void publishGPS() {
-    if (!myGNSS.isNewDataAvailable()) return;
-    // Latitude / longitude / altitude are available after the parser
-    // calls myGNSS.update() in the main loop.
-    double lat    = myGNSS.getLatitude();
-    double lon    = myGNSS.getLongitude();
-    double alt    = myGNSS.getAltitudeMSL();    // metres above MSL
-    float  hdop   = myGNSS.getHorizontalDOP();
-    uint8_t sats  = myGNSS.getSatellitesInView();
-    uint8_t fix   = myGNSS.getFixType();
-    uint8_t rtk   = myGNSS.getRTKStatus();       // 0=none,1=float,2=fixed
+    // UV
+    pub(TOPIC_UVT, p.UV.TEMP_C100);
+    pub(TOPIC_UVA, p.UV.UVA);
+    pub(TOPIC_UVB, p.UV.UVB);
+    pub(TOPIC_UVC, p.UV.UVC);
 
-    JsonDocument doc;
-    doc["lat"]  = serialized(String(lat,  8));
-    doc["lon"]  = serialized(String(lon,  8));
-    doc["alt"]  = serialized(String(alt,  3));
-    doc["hdop"] = serialized(String(hdop, 2));
-    doc["sats"] = sats;
-    doc["fix"]  = fix;
-    doc["rtk"]  = rtk;     // 2 = RTK Fixed – centimetre accuracy
-    String out;
-    serializeJson(doc, out);
-    mqttPublish(TOPIC_GPS, out);
+    // Colour light
+    pub(TOPIC_LIGHT_C, p.LightRGB.ClearChannel);
+    pub(TOPIC_LIGHT_R, p.LightRGB.RedChannel);
+    pub(TOPIC_LIGHT_G, p.LightRGB.GreenChannel);
+    pub(TOPIC_LIGHT_B, p.LightRGB.BlueChannel);
+
+    // Broad-spectrum / lux
+    pub(TOPIC_LIGHT_FS, p.Light.FullSpectrum);
+    pub(TOPIC_LIGHT_IR, p.Light.Infrared);
+    pub(TOPIC_LIGHT_VI, p.Light.Visible);
+    pub(TOPIC_LIGHT_LX, p.Light.Lux, 2);
+
+    // Air quality
+    pub(TOPIC_AQI,  p.AirQuality.AQI);
+    pub(TOPIC_TVOC, p.AirQuality.TVOC);
+    pub(TOPIC_ECO,  p.AirQuality.eCO2);
+
+    // Wind
+    pub(TOPIC_WS, p.Wind.Speed,     3);
+    pub(TOPIC_WD, p.Wind.Direction, 1);
+
+    // Lightning
+    pub(TOPIC_LE, p.Lightning.LightningEnergy);
+    pub(TOPIC_LD, p.Lightning.DistanceEstimation);
 }
 
 // ==========================================================================
 // STM32 FRAME RECEIVER
-// Scans Serial1 byte-by-byte for the 0x55, 0xAA sync word, then accumulates
-// exactly FRAME_SIZE bytes and validates the CRC.
+// Scans incoming bytes for the 0x55 0xAA SOF, accumulates exactly FRAME_SIZE
+// bytes, validates CRC, and dispatches to publishPayload().
 // ==========================================================================
 static void processSTMbyte(uint8_t b) {
     if (!syncFound) {
-        // Shift a 2-byte window looking for SOF = 0x55 0xAA (little-endian)
         static uint8_t prev = 0;
         if (prev == UART_FRAME_SOF_B0 && b == UART_FRAME_SOF_B1) {
-            // Found sync – place both bytes at the start of rxBuf
             rxBuf[0] = prev;
             rxBuf[1] = b;
             rxLen     = 2;
@@ -422,7 +423,6 @@ static void processSTMbyte(uint8_t b) {
         return;
     }
 
-    // Accumulate remaining bytes
     if (rxLen < FRAME_SIZE) {
         rxBuf[rxLen++] = b;
     }
@@ -431,21 +431,20 @@ static void processSTMbyte(uint8_t b) {
         syncFound = false;
         rxLen     = 0;
 
-        // Overlay struct
         UART_Frame_t frame;
         memcpy(&frame, rxBuf, FRAME_SIZE);
 
-        // Validate SOF
         if (frame.Start != UART_FRAME_START) {
-            Serial.println("[STM] Bad SOF");
+            Serial.println("[STM] Bad SOF – frame discarded");
             return;
         }
 
-        // Validate CRC
-        uint16_t calc = CRC16(reinterpret_cast<const uint8_t*>(&frame.Payload),
-                              sizeof(UART_Payload_t));
+        uint16_t calc = CRC16(
+            reinterpret_cast<const uint8_t*>(&frame.Payload),
+            sizeof(UART_Payload_t));
+
         if (calc != frame.CR) {
-            Serial.printf("[STM] CRC mismatch: got 0x%04X, expected 0x%04X\n",
+            Serial.printf("[STM] CRC fail: rx=0x%04X calc=0x%04X\n",
                           frame.CR, calc);
             return;
         }
@@ -455,100 +454,126 @@ static void processSTMbyte(uint8_t b) {
 }
 
 // ==========================================================================
-// SEND TO STM  (stub – for future downstream commands)
-// Asserts GPIO13 LOW to signal "ESP is transmitting" before writing,
-// then clears it.  The STM watches this on PA12 EXTI.
+// SEND TO STM  (stub – for future downstream commands, e.g. remote reset)
+//
+// Protocol:
+//   1. Check GPIO35: if HIGH the STM is currently transmitting – skip.
+//   2. Drive GPIO13 LOW  -> STM EXTI on PA12 triggers (ESP is transmitting).
+//   3. Write data, flush.
+//   4. Release GPIO13 HIGH (restored by the 2.2 kOhm pull-up on STM side).
 // ==========================================================================
 static void sendToSTM(const uint8_t* data, size_t len) {
-    // Only transmit if STM is not currently receiving something else
     if (digitalRead(PIN_STM_IS_TX) == HIGH) {
-        Serial.println("[STM-TX] STM busy, skipped");
+        // STM is currently transmitting – avoid bus collision
+        Serial.println("[STM-TX] STM busy, transmission skipped");
         return;
     }
-    digitalWrite(PIN_ESP_IS_TX, LOW);
+    digitalWrite(PIN_ESP_IS_TX, LOW);   // assert: ESP is transmitting
     Serial1.write(data, len);
     Serial1.flush();
-    digitalWrite(PIN_ESP_IS_TX, HIGH);
+    digitalWrite(PIN_ESP_IS_TX, HIGH);  // deassert: back to idle
 }
 
 // ==========================================================================
-// NTRIP CLIENT  (lightweight – feeds RTCM3 corrections to Serial2 / GPS)
-// Fill in the server credentials at the top of this file.
+// NTRIP CLIENT
+// Connects to a caster, strips the HTTP header, then forwards every RTCM3
+// byte to the LG290P via Serial2 to enable RTK Fixed mode.
+// Auto-reconnects after 10 s if the TCP link drops.
 // ==========================================================================
-static bool ntripConnected = false;
-static uint32_t ntripLastAttempt = 0;
-
 static void ntripLoop() {
-    if (strlen(NTRIP_HOST) == 0) return;   // not configured
-    if (!eth_connected) return;
+    if (strlen(NTRIP_HOST) == 0) return;  // not configured – skip
+    if (!eth_connected)           return;
 
-    if (!ntripEthClient.connected()) {
-        ntripConnected = false;
-        if (millis() - ntripLastAttempt < 10000) return;
+    if (!ntripClient.connected()) {
+        ntripStreamActive = false;
+        if (millis() - ntripLastAttempt < 10000UL) return;
         ntripLastAttempt = millis();
 
-        Serial.print("[NTRIP] Connecting to ");
-        Serial.print(NTRIP_HOST);
-        Serial.print(":");
-        Serial.println(NTRIP_PORT);
+        Serial.printf("[NTRIP] Connecting to %s:%u\n", NTRIP_HOST, NTRIP_PORT);
 
-        if (!ntripEthClient.connect(NTRIP_HOST, NTRIP_PORT)) {
-            Serial.println("[NTRIP] Connection failed");
+        if (!ntripClient.connect(NTRIP_HOST, NTRIP_PORT)) {
+            Serial.println("[NTRIP] TCP connection failed");
             return;
         }
 
-        // Send NTRIP 1.0 request
+        // Build NTRIP/1.0 GET request with optional Basic auth
         String auth = "";
         if (strlen(NTRIP_USER) > 0) {
-            // Base64-encode user:pass  (simple manual encoding for small strings)
-            String cred = String(NTRIP_USER) + ":" + String(NTRIP_PASS);
-            // Use Arduino base64 if available, otherwise inline:
-            // For brevity we use the raw bytes — replace with a proper
-            // base64 library if credentials contain non-ASCII characters.
-            auth = "Authorization: Basic ";
-            // Simple ASCII base64 table
             static const char b64[] =
                 "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            String cred = String(NTRIP_USER) + ":" + String(NTRIP_PASS);
             const uint8_t* in = reinterpret_cast<const uint8_t*>(cred.c_str());
             size_t n = cred.length();
+            String enc = "";
             for (size_t i = 0; i < n; i += 3) {
-                uint32_t val = (uint32_t)in[i] << 16;
-                if (i+1 < n) val |= (uint32_t)in[i+1] << 8;
-                if (i+2 < n) val |= (uint32_t)in[i+2];
-                auth += b64[(val >> 18) & 0x3F];
-                auth += b64[(val >> 12) & 0x3F];
-                auth += (i+1 < n) ? b64[(val >>  6) & 0x3F] : '=';
-                auth += (i+2 < n) ? b64[(val      ) & 0x3F] : '=';
+                uint32_t v = (uint32_t)in[i] << 16;
+                if (i + 1 < n) v |= (uint32_t)in[i + 1] << 8;
+                if (i + 2 < n) v |= (uint32_t)in[i + 2];
+                enc += b64[(v >> 18) & 0x3F];
+                enc += b64[(v >> 12) & 0x3F];
+                enc += (i + 1 < n) ? b64[(v >>  6) & 0x3F] : '=';
+                enc += (i + 2 < n) ? b64[(v      ) & 0x3F] : '=';
             }
-            auth += "\r\n";
+            auth = "Authorization: Basic " + enc + "\r\n";
         }
 
-        String request = String("GET /") + NTRIP_MOUNTPOINT + " HTTP/1.0\r\n"
-                       + "Host: " + NTRIP_HOST + "\r\n"
-                       + "Ntrip-Version: Ntrip/1.0\r\n"
-                       + "User-Agent: NTRIPClient/ESP32\r\n"
-                       + auth
-                       + "Connection: close\r\n\r\n";
-        ntripEthClient.print(request);
-        Serial.println("[NTRIP] Request sent, waiting for ICY 200 OK…");
+        String req = String("GET /") + NTRIP_MOUNTPOINT + " HTTP/1.0\r\n"
+                   + "Host: " + NTRIP_HOST + "\r\n"
+                   + "Ntrip-Version: Ntrip/1.0\r\n"
+                   + "User-Agent: NTRIPClient/ESP32\r\n"
+                   + auth
+                   + "Connection: close\r\n\r\n";
+        ntripClient.print(req);
+        Serial.println("[NTRIP] Request sent – waiting for ICY 200 OK");
     }
 
-    // Forward any available RTCM bytes to the GPS
-    while (ntripEthClient.available()) {
-        uint8_t b = ntripEthClient.read();
-        if (!ntripConnected) {
-            // Discard HTTP header bytes until we see \r\n\r\n
-            static uint8_t hdr[4] = {0};
-            memmove(hdr, hdr+1, 3);
+    // Forward RTCM bytes; discard the HTTP response header first
+    while (ntripClient.available()) {
+        uint8_t b = ntripClient.read();
+        if (!ntripStreamActive) {
+            // Look for the CR LF CR LF end-of-header sequence
+            static uint8_t hdr[4] = {0, 0, 0, 0};
+            memmove(hdr, hdr + 1, 3);
             hdr[3] = b;
-            if (hdr[0]=='\r' && hdr[1]=='\n' && hdr[2]=='\r' && hdr[3]=='\n') {
-                ntripConnected = true;
-                Serial.println("[NTRIP] RTCM stream active");
+            if (hdr[0] == '\r' && hdr[1] == '\n' &&
+                hdr[2] == '\r' && hdr[3] == '\n') {
+                ntripStreamActive = true;
+                Serial.println("[NTRIP] RTCM3 stream active – forwarding to LG290P");
             }
         } else {
-            Serial2.write(b);   // forward correction bytes to LG290P
+            Serial2.write(b);   // correction bytes -> LG290P UART
         }
     }
+}
+
+// ==========================================================================
+// OTA SETUP  (called once from setup; ArduinoOTA.begin() deferred to loop)
+// ==========================================================================
+static void otaSetup() {
+    ArduinoOTA.setHostname(OTA_HOSTNAME);
+    ArduinoOTA.setPassword(OTA_PASSWORD);
+
+    ArduinoOTA.onStart([]() {
+        String type = (ArduinoOTA.getCommand() == U_FLASH) ? "sketch" : "filesystem";
+        Serial.println("[OTA] Start – updating " + type);
+    });
+    ArduinoOTA.onEnd([]() {
+        Serial.println("\n[OTA] Update complete");
+    });
+    ArduinoOTA.onProgress([](unsigned int done, unsigned int total) {
+        Serial.printf("[OTA] %u%%\r", done * 100 / total);
+    });
+    ArduinoOTA.onError([](ota_error_t err) {
+        Serial.printf("[OTA] Error[%u]: ", err);
+        switch (err) {
+            case OTA_AUTH_ERROR:    Serial.println("Auth Failed");    break;
+            case OTA_BEGIN_ERROR:   Serial.println("Begin Failed");   break;
+            case OTA_CONNECT_ERROR: Serial.println("Connect Failed"); break;
+            case OTA_RECEIVE_ERROR: Serial.println("Receive Failed"); break;
+            case OTA_END_ERROR:     Serial.println("End Failed");     break;
+        }
+    });
+    // ArduinoOTA.begin() is called in loop() once eth_connected becomes true
 }
 
 // ==========================================================================
@@ -556,55 +581,71 @@ static void ntripLoop() {
 // ==========================================================================
 void setup() {
     Serial.begin(115200);
-    delay(1000); // Let ESP do the Boot
-    Serial.println("\n[WS] Weather Station ESP32 starting…");
+    delay(1000);   // allow USB-serial to enumerate before printing
+    Serial.println("\n[WS] Weather Station ESP32 – booting");
 
-    // --- Handshake pins ---
-    pinMode(PIN_STM_IS_RX, INPUT);
+    // --- STM32 handshake pins ---
+    pinMode(PIN_STM_IS_TX, INPUT);
     pinMode(PIN_ESP_IS_TX, OUTPUT);
-	pinMode(PIN_GPS_RST, OUTPUT);
-    digitalWrite(PIN_ESP_IS_TX, HIGH);
-	digitalWrite(PIN_GPS_RST, HIGH);
+    digitalWrite(PIN_ESP_IS_TX, HIGH);   // idle HIGH (deasserted)
 
-    // Optional Hardware Reset: Ensure the LG290P starts fresh for RTK.
-    digitalWrite(PIN_GPS_RST, LOW);  // Trigger Reset (Negative Logic) 
-    delay(200);                      // Hold for 200ms
-    digitalWrite(PIN_GPS_RST, HIGH); // Release Reset
-    delay(1000); // Wait for LG290P to finish its internal boot cycle
+    // --- LG290P hardware reset ---
+    pinMode(PIN_GPS_RST, OUTPUT);
+    digitalWrite(PIN_GPS_RST, HIGH);     // deasserted (normal operation)
+    delay(10);
+    digitalWrite(PIN_GPS_RST, LOW);      // assert reset  (active-LOW)
+    delay(200);
+    digitalWrite(PIN_GPS_RST, HIGH);     // release reset
+    delay(1000);                         // wait for LG290P boot cycle
+    Serial.println("[WS] LG290P reset done");
+
     // --- STM32 UART ---
-    // 115200 8N1 to match STM huart1 (adjust baud if STM side differs)
     Serial1.begin(115200, SERIAL_8N1, PIN_STM_RX, PIN_STM_TX);
-    Serial.println("[WS] Serial1 (STM) ready");
+    Serial.println("[WS] Serial1 (STM32) ready at 115200 baud");
 
     // --- LG290P GNSS UART ---
-    // Default LG290P baud is 460800; if your module was reconfigured, change this.
     Serial2.begin(460800, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
     if (myGNSS.begin(Serial2)) {
-        Serial.println("[GPS] LG290P connected");
-        // Request 1 Hz GGA + RMC output on UART1 of the LG290P
-        myGNSS.setNMEAOutputRate(1);  // 1 Hz
-        // Enable RTK status output (PQTM messages)
-        // The SparkFun library automatically parses these.
+        Serial.println("[GPS] LG290P detected");
+        myGNSS.setNMEAOutputRate(1);   // 1 Hz NMEA sentences
+        // Library auto-parses PQTM RTK-status messages
     } else {
-        Serial.println("[GPS] LG290P not detected – check wiring / baud rate");
+        Serial.println("[GPS] LG290P NOT detected – check wiring and baud rate");
     }
 
     // --- Ethernet ---
-    Network.onEvent(onEvent);
+    Network.onEvent(onEthEvent);
     ETH.begin();
-    Serial.println("[WS] Ethernet init…");
+    Serial.println("[WS] Ethernet initialising");
 
     // --- MQTT ---
     mqtt.setServer(MQTT_SERVER, MQTT_PORT);
-    mqtt.setBufferSize(512);   // increase if JSON payloads exceed 256 bytes
+    mqtt.setBufferSize(256);
     mqtt.setKeepAlive(30);
+
+    // --- OTA callbacks ---
+    otaSetup();
+
+    Serial.printf("[WS] Frame size: %u bytes\n", (unsigned)FRAME_SIZE);
+    Serial.println("[WS] Setup complete");
 }
 
 // ==========================================================================
 // LOOP
 // ==========================================================================
 void loop() {
-    // ---- MQTT keep-alive ----
+
+    // --- OTA: start service once we have an IP address ---
+    if (eth_connected && !otaStarted) {
+        ArduinoOTA.begin();
+        otaStarted = true;
+        Serial.println("[OTA] Service started – ready for wireless upload");
+    }
+    if (otaStarted) {
+        ArduinoOTA.handle();
+    }
+
+    // --- MQTT keep-alive ---
     if (eth_connected) {
         if (!mqtt.connected()) {
             mqttReconnect();
@@ -613,17 +654,14 @@ void loop() {
         }
     }
 
-    // ---- STM32 UART receive ----
+    // --- STM32 frame receive ---
     while (Serial1.available()) {
         processSTMbyte(static_cast<uint8_t>(Serial1.read()));
     }
 
-    // ---- GPS update ----
-    // myGNSS.update() feeds bytes from Serial2 into the SparkFun parser.
-    // Call it as often as possible to avoid UART buffer overflow at 460800.
+    // --- GPS: feed parser; publish whenever a new fix is ready ---
     myGNSS.update();
-    publishGPS();
 
-    // ---- NTRIP corrections ----
+    // --- NTRIP: forward RTCM3 corrections to LG290P ---
     ntripLoop();
 }
