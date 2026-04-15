@@ -162,6 +162,10 @@ extern volatile uint8_t Decpl_RDY;
 #define N_FILT          5      /* sliding-window depth (must be odd)         */
 #define N_FILT_HALF     2      /* N_FILT / 2, index of median in sorted copy */
 
+// Dew point calculation constants (Magnus-Tetens approximation)
+#define DEW_POINT_CONST_A				17.27f	// Magnus-Tetens constant A
+#define DEW_POINT_CONST_B				237.7f	// Magnus-Tetens constant B
+
 static float   g_tof_buf  [TOF_PATH_COUNT][N_FILT];  /* circular buffers     */
 static uint8_t g_tof_head [TOF_PATH_COUNT];           /* next write index     */
 static uint8_t g_tof_count[TOF_PATH_COUNT];           /* valid sample count   */
@@ -170,15 +174,24 @@ static uint8_t g_tof_count[TOF_PATH_COUNT];           /* valid sample count   */
  * Bytes 0-3 of USER_DATA in the transmitting sensor = IEEE-754 float32.
  * Sensor 0 stores D01, Sensor 1 stores D12, Sensor 2 stores D20.
  * Index i = transmitter index.  Populated by Wind_CalibrateReflector(). */
+ 
+// !!! ToDo Change g_pathLen_um from float to uint32_t since we have the distance in um
+// Or replace it with the 
 static float g_pathLen_um[3] = {NOMINAL_PATH_UM, NOMINAL_PATH_UM, NOMINAL_PATH_UM};
 
-const float height = 58.0f; // Height above mean sea level in meters
-
 Wind_EnvData_t externalData = {
-	.Temperature = 23.63f,    // degC
-	.RH          = 62.22f,    // %
-	.Pressure    = 1027.7f,   // hPa
-	.SoundSpeed  = 0.0f       // will be computed
+	.Temperature = 23.63f,	// degC
+	.RH          = 62.22f,	// %
+	.Pressure    = 1027.7f,	// hPa
+	.DewPoint    = 15.82f,	// degC
+	.SoundSpeed  = 346.53f	// will be computed
+};
+
+Wind_Input_t CalibData = {
+	.Height		= 500.0f,	// m
+	.PathLenD01	= 316228,	// um
+	.PathLenD12	= 316228,	// um
+	.PathLenD20	= 316228,	// um
 };
 
 static void TIM2_IC_Start_All(void) {
@@ -206,27 +219,32 @@ static inline void TIM2_Reset_DMA(void) {
  *          pressure, and relative humidity.  If Pressure <= 0, it is estimated from
  *          Height using the ISA troposphere barometric formula.  Result is stored in
  *          env->SoundSpeed and also returned.
- * @param env  Pointer to Wind_EnvData_t (Temperature, RH, Pressure, Height).
- * @return Speed of sound in m/s(um/us), or 343.0f if env is NULL.
+ *			Calculates the dew point temperature from the latest sensor reading.
+ *			Uses the Magnus-Tetens approximation:
+ *            gamma = (A * T / (B + T)) + ln(RH / 100)
+ *            Td    = B * gamma / (A - gamma)
+ *          where A = DEW_POINT_CONST_A (17.27), B = DEW_POINT_CONST_B (237.7 °C).
+ * @param None.
+ * @return None.
  */
-float Wind_ComputeSoundSpeed(Wind_EnvData_t *env) {
-	if (!env) return SOUND_SPEED;
-	const float T_C = env->Temperature;
+void Wind_ComputeSoundSpeed(void) {
+	if (!externalData) return SOUND_SPEED;
+	const float T_C = externalData->Temperature;
 	const float T_K = T_C + KELVIN_OFFSET;
-	// --- Pressure (hPa). If not provided, estimate from height with std. atmosphere (0?11 km) ---
-	float P_hPa = env->Pressure;
+	// --- Pressure (hPa). If not provided, estimate from height with std. atmosphere ---
+	float P_hPa = externalData->Pressure;
 	if (P_hPa <= 0.0) {
 		// Barometric formula (troposphere):
 		// P = P0 * (1 - L*h/T0)^(g*M/(R*L))  [Pa]
-		const float term = 1.0 - (L * height) / T0;
+		const float term = 1.0 - (L * CalibData->Height) / T0;
 		const float expo = (G * M) / (R * L);
 		float P_Pa = P0 * pow(term, expo);
 		if (P_Pa < 1.0) P_Pa = 1.0; // guard
 		P_hPa = P_Pa * 0.01;        // convert Pa to hPa
-		env->Pressure = (float)P_hPa;
+		externalData->Pressure = (float)P_hPa;
 	}
 	// --- Relative humidity as fraction ---
-	const float RH_frac = env->RH / RH_DIVISOR;
+	const float RH_frac = externalData->RH / RH_DIVISOR;
 	// --- Saturation vapor pressure over water (Tetens, hPa) ---
 	// es = 6.1078 * exp(17.2693882 * T_C / (T_C + 237.3))
 	const float es = SATURATION_CONSTANT * expf(17.269f * T_C / (T_C + 237.3f));
@@ -240,8 +258,10 @@ float Wind_ComputeSoundSpeed(Wind_EnvData_t *env) {
 	const float Tv = T_K * (1.0f + 0.6077f * q);
 	// Speed of sound in moist air: c = sqrt(gamma * Rd * Tv)
 	float c = sqrtf(GAMMA_R_D * Tv); 
-	env->SoundSpeed = c;
-	return c;
+	externalData->SoundSpeed = c;
+	float gamma = ((DEW_POINT_CONST_A * env->Temperature) / (DEW_POINT_CONST_B + env->Temperature)) + logf(env->RH / 100.0f);
+	externalData->DewPoint = (DEW_POINT_CONST_B * gamma) / (DEW_POINT_CONST_A - gamma);
+	return;
 }
 
 
@@ -487,65 +507,8 @@ static HAL_StatusTypeDef run_one_measurement(uint8_t tx, float  *tof_rx1_ticks, 
     return HAL_OK;
 }
 
-/**
- * @brief Write a float32 calibrated path length to USER_DATA bytes 0-3 of a sensor.
- * @details Splits the IEEE-754 float into 4 bytes using memcpy and writes each byte
- *          to REG_USER_DATA1 + offset (0-3) via Wind_RegisterWrite().
- * @param sensorID  Sensor UART address (0-7).
- * @param path_um  Calibrated one-way acoustic path length in um.
- * @return HAL status.
- */
-static HAL_StatusTypeDef store_path_to_eeprom(uint8_t sensorID, float path_um) {
-    EEImage_t *ee = PGA460_GetEEData(sensorID);
-    if (ee == NULL) return HAL_ERROR;
-
-    memcpy(&ee->UserData[0], &path_um, sizeof(float));
-
-    if (PGA460_EEPROMBulkWrite(sensorID) != HAL_OK) {
-        DEBUG("Sensor %u: EEPROM bulk write failed during calibration store\n", sensorID);
-        return HAL_ERROR;
-    }
-    return HAL_OK;
-}
-
-/**
- * @brief Read a float32 calibrated path length from USER_DATA bytes 0-3 of a sensor.
- * @details Reads 4 bytes from REG_USER_DATA1 + offset (0-3) and reassembles them into
- *          a float32 using memcpy.  Validates the result against a +/-10% window around
- *          NOMINAL_PATH_UM; returns NOMINAL_PATH_UM if the stored value is out of range.
- * @param sensorID  Sensor UART address (0-7).
- * @return Calibrated path length in um, or NOMINAL_PATH_UM if not stored or invalid.
- */
-static float load_path_from_eeprom(uint8_t sensorID) {
-    EEImage_t *ee = PGA460_GetEEData(sensorID);
-    if (ee == NULL) return NOMINAL_PATH_UM;
-
-    float result;
-    memcpy(&result, &ee->UserData[0], sizeof(float));
-
-    if (result < NOMINAL_PATH_UM * 0.90f || result > NOMINAL_PATH_UM * 1.10f) {
-        DEBUG("Sensor %u: EEPROM path %.1f um out of range, using nominal\n", sensorID, result);
-        return NOMINAL_PATH_UM;
-    }
-    return result;
-}
-
-/**
- * @brief Wind_LoadCalibration function implementation.
- * @details Calls load_path_from_eeprom() for each of the three sensors and stores the
- *          result in g_pathLen_um[].  Falls back to NOMINAL_PATH_UM on failure.
- *          Call once at boot after Wind_Init() so prior calibrations survive power-off.
- */
-void Wind_LoadCalibration(void) {
-    for (uint8_t i = 0; i < 3; i++) {
-        g_pathLen_um[i] = load_path_from_eeprom(i);
-        DEBUG("Sensor %u: loaded D = %.2f um\n", i, g_pathLen_um[i]);
-    }
-}
-
 void Wind_Init(void) {
 	ResetFilter();
-	Wind_LoadCalibration();
 	HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_1, (uint32_t *)&ToF_Result[0].E0, 2);
 	HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_2, (uint32_t *)&ToF_Result[1].E0, 2);
 	HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_3, (uint32_t *)&ToF_Result[2].E0, 2);
@@ -561,18 +524,12 @@ void Wind_Init(void) {
  *            D_ij = c * (t_ij + t_ji) / 2
  *          Wind cancels in the sum, leaving only path geometry.
  *
- *          Pair-to-sensor storage mapping:
- *            D_01 -> sensor 0 USER_DATA (tof[0][0], tof[1][0])
- *            D_12 -> sensor 1 USER_DATA (tof[1][1], tof[2][1])
- *            D_20 -> sensor 2 USER_DATA (tof[2][0], tof[0][1])
- *
  *          Returns HAL_ERROR if fewer than N_CAL/2 cycles produce valid measurements.
- * @param soundSpeed_ms  Speed of sound in m/s from Wind_UpdateEnvironment() (1 m/s = 1 um/us).
- * @param burnEEPROM  1 = commit calibration to PGA460 EEPROM flash; 0 = RAM only.
+ * @param None.
  * @return HAL status.
  */
-HAL_StatusTypeDef Wind_CalibrateReflector(float soundSpeed_ms, uint8_t burnEEPROM) {
-    const float c = soundSpeed_ms;   /* 1 m/s = 1 um/us exactly */
+HAL_StatusTypeDef Wind_CalibrateReflector(void) {
+    const float c = env->SoundSpeed;   /* 1 m/s = 1 um/us exactly */
     DEBUG("Calibration start: c = %.4f m/s, N_CAL = %u\n", c, N_CAL);
     /*
      * Accumulators for the six one-way ToF sums (us).
@@ -623,27 +580,14 @@ HAL_StatusTypeDef Wind_CalibrateReflector(float soundSpeed_ms, uint8_t burnEEPRO
      *   D_20  stored in sensor 2  (t_20 = sum[2][0], t_02 = sum[0][1])
      */
     /* Average ToF per pair (us) */
-		float t_avg_01 = (sum[0][0] + sum[1][0]) * 0.5f * inv_valid;
-		float t_avg_12 = (sum[1][1] + sum[2][1]) * 0.5f * inv_valid;
-		float t_avg_20 = (sum[2][0] + sum[0][1]) * 0.5f * inv_valid;
-    float d[3];
-    d[0] = c * t_avg_01 / TICKS_PER_US;   /* D_01 um, owned by sensor 0 */
-    d[1] = c * t_avg_12 / TICKS_PER_US;   /* D_12 um, owned by sensor 1 */
-    d[2] = c * t_avg_20 / TICKS_PER_US;   /* D_20 um, owned by sensor 2 */
-    for (uint8_t i = 0; i < 3; i++) {
-        g_pathLen_um[i] = d[i];
-        DEBUG("D_%u%u = %.2f um  (%.4f mm, nominal %.2f um, delta %+.1f um, %u samples)\n", i, (i + 1) % 3, d[i], d[i] * 0.001f, NOMINAL_PATH_UM, d[i] - NOMINAL_PATH_UM, valid);
-        if (store_path_to_eeprom(i, d[i]) != HAL_OK) {
-            return HAL_ERROR;
-        }
-        if (burnEEPROM) {
-            if (PGA460_BurnEEPROM(i) != HAL_OK) {
-                DEBUG("Sensor %u: EEPROM burn failed\n", i);
-                return HAL_ERROR;
-            }
-            HAL_Delay(50);   /* PGA460 internal EEPROM write cycle */
-        }
-    }
+	float t_avg_01 = (sum[0][0] + sum[1][0]) * 0.5f * inv_valid;
+	float t_avg_12 = (sum[1][1] + sum[2][1]) * 0.5f * inv_valid;
+	float t_avg_20 = (sum[2][0] + sum[0][1]) * 0.5f * inv_valid;
+    CalibData->PathLenD01 = c * t_avg_01 / TICKS_PER_US;   /* D_01 um, owned by sensor 0 */
+    CalibData->PathLenD12 = c * t_avg_12 / TICKS_PER_US;   /* D_12 um, owned by sensor 1 */
+    CalibData->PathLenD20 = c * t_avg_20 / TICKS_PER_US;   /* D_20 um, owned by sensor 2 */
+
+	// ToDo Send calibration data to ESP
     DEBUG("Calibration complete (%u/%u cycles used)\n", valid, N_CAL);
     return HAL_OK;
 }

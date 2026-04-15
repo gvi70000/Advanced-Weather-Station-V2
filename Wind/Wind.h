@@ -37,12 +37,24 @@ typedef struct __attribute__((packed)) {
 //          Call Wind_UpdateEnvironment() to update and recompute SoundSpeed.
 //          SoundSpeed is then used automatically by PGA460_MeasureWind().
 typedef struct __attribute__((packed)) {
-    //float Height;      // Altitude above sea level in metres (from GPS; 0 to use barometric estimate)
+    //float Height;    // Altitude above sea level in metres (from GPS; 0 to use barometric estimate)
     float Temperature; // Ambient temperature in degrees Celsius (from BMP581 / HDC302x)
     float RH;          // Relative humidity in % (from HDC302x)
     float Pressure;    // Atmospheric pressure in hPa (from BMP581; 0 to estimate from Height)
+	float DewPoint;	   // The temperature to which air must be cooled to become saturated with water vapor,
+					   // causing it to condense into liquid water (dew, fog, or frost). It is an absolute measure of humidity,
+					   // indicating the amount of moisture in the air rather than a percentage like relative humidity.
+					   // A higher dew point indicates more moisture.
     float SoundSpeed;  // Speed of sound in m/s - computed by Wind_UpdateEnvironment()
 } Wind_EnvData_t;
+
+// These values will come via Serial from Olimex board after boot before we initialize the wind
+typedef struct __attribute__((packed)) {
+    float Height;    // Altitude above sea level in metres (from GPS; 0 to use barometric estimate)
+    uint32_t PathLenD01; // Path length for transducer 0 in um
+	uint32_t PathLenD12; // Path length for transducer 1 in um
+	uint32_t PathLenD20; // Path length for transducer 2 in um
+} Wind_Input_t;
 
 /* Symbolic indices for the six one-way ToF paths */
 typedef enum {
@@ -58,13 +70,8 @@ typedef enum {
 // Global environmental data instance (defined in Wind.c).
 // Read SoundSpeed after calling Wind_UpdateEnvironment().
 extern Wind_EnvData_t externalData;
-
+extern Wind_Input_t CalibData;
 void Wind_Init(void);
-
-// @brief Load previously calibrated path lengths from each sensor's PGA460 USER_DATA EEPROM.
-// @details Call once at boot after PGA460_Init() so prior calibrations survive power-off.
-//          Falls back to the nominal geometric path length if stored values are out of range.
-void Wind_LoadCalibration(void);
 
 // @brief Measure the true acoustic path length for all three transducer pairs in still air.
 // @details Fires all three transmitters N_CAL times (identical to Wind_Measure), computes
@@ -76,7 +83,7 @@ void Wind_LoadCalibration(void);
 // @return HAL status.
 HAL_StatusTypeDef Wind_CalibrateReflector(float soundSpeed_ms, uint8_t burnEEPROM);
 
-float Wind_ComputeSoundSpeed(Wind_EnvData_t *env);
+void Wind_ComputeSoundSpeed(void);
 
 // @brief Perform a full 3-transmitter measurement cycle and return filtered wind vector.
 // @details Fires each transmitter in turn via TIM2 DECPL hardware timestamping (DMA),
