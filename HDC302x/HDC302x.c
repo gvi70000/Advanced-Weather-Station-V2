@@ -329,23 +329,6 @@ HAL_StatusTypeDef HDC302x_ReadHistory(HDC302x_t* sensorObj) {
 }
 
 /**
- * @brief Calculates the dew point temperature from the latest sensor reading.
- * @details Uses the Magnus-Tetens approximation:
- *            gamma = (A * T / (B + T)) + ln(RH / 100)
- *            Td    = B * gamma / (A - gamma)
- *          where A = DEW_POINT_CONST_A (17.27), B = DEW_POINT_CONST_B (237.7 °C).
- *          Requires HDC302x_ReadData() to have been called first.
- * @param sensorObj Pointer to sensor handle.
- * @return Dew point in degrees Celsius.
- */
-float HDC302x_GetDewPoint(HDC302x_t* sensorObj) {
-    float t     = sensorObj->Data.Temperature;
-    float rh    = sensorObj->Data.Humidity;
-    float gamma = ((DEW_POINT_CONST_A * t) / (DEW_POINT_CONST_B + t)) + logf(rh / 100.0f);
-    return (DEW_POINT_CONST_B * gamma) / (DEW_POINT_CONST_A - gamma);
-}
-
-/**
  * @brief Configures the heater power level and enables the integrated heater.
  * @details Sends HDC302X_CMD_HEATER_CONFIG with the power payload via SendHeaterCommand,
  *          then sends HDC302X_CMD_HEATER_ENABLE via SendDeviceCommand.
