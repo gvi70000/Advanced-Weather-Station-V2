@@ -65,6 +65,22 @@
 #define SENSOR_FRAME_MASK 0x3F   // bits 0–5
 #define UART_FRAME_START  0xAA55
 #define UART_PAYLOAD_SIZE 78
+
+// These are usd for Temperature and RH compensation
+#define DT_SEC             1.0f
+
+#define TEMP_DEADBAND      0.2f
+#define RH_DEADBAND        0.5f
+
+#define MAX_TEMP_STEP      0.2f
+#define MAX_RH_STEP        0.5f
+
+#define TEMP_OFFSET_MIN   -1.0f
+#define TEMP_OFFSET_MAX    1.0f
+
+#define RH_OFFSET_MIN    -3.0f
+#define RH_OFFSET_MAX     3.0f
+
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -97,18 +113,19 @@ ENS160_Resistance_t ENS160_Resistance;
 //TSL25911_LightData_t TSL25911_Data;
 
 //Wind_t windData;
+extern Wind_Input_t CalibData; // Height, PathLenD01, PathLenD12 and PathLenD20
+
 
 uint32_t time = 0;
 
 typedef struct __attribute__((packed)) {
     /* --- Environmental data --- */
-    Wind_EnvData_t Env;     
+    extern Wind_EnvData_t externalData;
     // Temperature (4f) – °C
     // RH          (4f) – %
     // Pressure    (4f) – hPa
+	// DewPoint	   (4f) – °C
     // SoundSpeed  (4f) – m/s
-    float DewPoint;         
-    // Dew point temperature (4f) – °C
 
     /* --- Lightning sensor (AS3935) --- */
     AS3935_LightningData_t Lightning;
@@ -254,8 +271,8 @@ int main(void)
 
 	// Start HDC302x auto-measurement at 0.5 Hz LPM0 sensor measures continuously;
 	// HDC302x_ReadData() fetches the latest result from the output register
-	HDC302x_StartAutoMeasurement(&Sensor1, HDC302X_CMD_AUTO_MEASUREMENT_1_EVERY_2S_LPM0);
-	HDC302x_StartAutoMeasurement(&Sensor2, HDC302X_CMD_AUTO_MEASUREMENT_1_EVERY_2S_LPM0);
+	HDC302x_StartAutoMeasurement(&Sensor1, HDC302X_CMD_AUTO_MEASUREMENT_1_EVERY_1S_LPM0);
+	HDC302x_StartAutoMeasurement(&Sensor2, HDC302X_CMD_AUTO_MEASUREMENT_1_EVERY_1S_LPM0);
 	// Initialize BMP581 0.5Hz
 	if (BMP581_Init() == HAL_OK) {
 			DEBUG("BMP_INIT_OK!\n");
@@ -298,34 +315,79 @@ int main(void)
 			// The data is sent to Wind library to calculate the speed of sound
 			// Once every 1003ms
 			if (BMP_Ready) {
-					BMP_Ready				= 0;
-					//float temp1			= 0.0f;
-					//float temp2			= 0.0f;
-					float rh1				= 0.0f;
-					float rh2				= 0.0f;
-					
-					BMP581_Get_TempPressData(&BMP581_Data);
-					if (HDC302x_ReadData(&Sensor1) == HAL_OK) {
-							//temp1 = Sensor1.Data.Temperature; // HDC is reporting higher temperature - not used
-							rh1   = Sensor1.Data.Humidity;
-					}
-					if (HDC302x_ReadData(&Sensor2) == HAL_OK) {
-							//temp2 = Sensor2.Data.Temperature;
-							rh2   = Sensor2.Data.Humidity;
-					}
-					
-					// Update sound speed with latest sensor data (called ~1 Hz with BMP_Ready)
-					txFrameBuf.Payload.Env.Temperature	= BMP581_Data.temperature;
-					txFrameBuf.Payload.Env.RH						= (rh1   + rh2)   / 2.0f;
-					txFrameBuf.Payload.Env.Pressure			= BMP581_Data.pressure;
-					ENS160_SetEnvCompensation(txFrameBuf.Payload.Env.Temperature, txFrameBuf.Payload.Env.RH);
-					// Get Dew Point by using Sensor1
-					Sensor1.Data.Temperature = txFrameBuf.Payload.Env.Temperature;
-					Sensor1.Data.Humidity = txFrameBuf.Payload.Env.RH;
-					txFrameBuf.Payload.DewPoint = HDC302x_GetDewPoint(&Sensor1);
-					Wind_ComputeSoundSpeed(&txFrameBuf.Payload.Env);
-					
-					sensorReadyFlags |= SENSOR_ENV;
+				BMP_Ready = 0;
+				float temp1 = 0.0f, temp2 = 0.0f;
+				float rh1 = 0.0f, rh2 = 0.0f;
+				static float prevOutT1 = 0.0f, prevOutT2 = 0.0f;
+				static float prevOutRH1 = 0.0f, prevOutRH2 = 0.0f;
+				// Read sensors
+				BMP581_Get_TempPressData(&BMP581_Data);
+				if (HDC302x_ReadData(&Sensor1) == HAL_OK) {
+					temp1 = Sensor1.Data.Temperature;
+					rh1   = Sensor1.Data.Humidity;
+				}
+				if (HDC302x_ReadData(&Sensor2) == HAL_OK) {
+					temp2 = Sensor2.Data.Temperature;
+					rh2   = Sensor2.Data.Humidity;
+				}
+				//  TEMPERATURE CONTROL (Adaptive PID)
+				float errT1 = BMP581_Data.temperature - temp1;
+				float errT2 = BMP581_Data.temperature - temp2;
+				// Deadband
+				if (fabsf(errT1) < TEMP_DEADBAND) errT1 = 0.0f;
+				if (fabsf(errT2) < TEMP_DEADBAND) errT2 = 0.0f;
+				float outT1 = PID_Update_Adaptive(&pidTemp1, errT1, DT_SEC);
+				float outT2 = PID_Update_Adaptive(&pidTemp2, errT2, DT_SEC);
+				// Rate limiting
+				float deltaT1 = outT1 - prevOutT1;
+				if (deltaT1 > MAX_TEMP_STEP) outT1 = prevOutT1 + MAX_TEMP_STEP;
+				if (deltaT1 < -MAX_TEMP_STEP) outT1 = prevOutT1 - MAX_TEMP_STEP;
+				float deltaT2 = outT2 - prevOutT2;
+				if (deltaT2 > MAX_TEMP_STEP) outT2 = prevOutT2 + MAX_TEMP_STEP;
+				if (deltaT2 < -MAX_TEMP_STEP) outT2 = prevOutT2 - MAX_TEMP_STEP;
+				prevOutT1 = outT1;
+				prevOutT2 = outT2;
+				// Clamp offsets
+				if (outT1 > TEMP_OFFSET_MAX) outT1 = TEMP_OFFSET_MAX;
+				if (outT1 < TEMP_OFFSET_MIN) outT1 = TEMP_OFFSET_MIN;
+				if (outT2 > TEMP_OFFSET_MAX) outT2 = TEMP_OFFSET_MAX;
+				if (outT2 < TEMP_OFFSET_MIN) outT2 = TEMP_OFFSET_MIN;
+				// HUMIDITY CONTROL (Adaptive PID, symmetric)
+				float avgRH = (rh1 + rh2) * 0.5f;
+				float errRH1 = avgRH - rh1;
+				float errRH2 = avgRH - rh2;
+				// Deadband
+				if (fabsf(errRH1) < RH_DEADBAND) errRH1 = 0.0f;
+				if (fabsf(errRH2) < RH_DEADBAND) errRH2 = 0.0f;
+				float outRH1 = PID_Update_Adaptive(&pidRH, errRH1, DT_SEC);
+				float outRH2 = PID_Update_Adaptive(&pidRH, errRH2, DT_SEC);
+				// Rate limiting
+				float deltaRH1 = outRH1 - prevOutRH1;
+				if (deltaRH1 > MAX_RH_STEP) outRH1 = prevOutRH1 + MAX_RH_STEP;
+				if (deltaRH1 < -MAX_RH_STEP) outRH1 = prevOutRH1 - MAX_RH_STEP;
+				float deltaRH2 = outRH2 - prevOutRH2;
+				if (deltaRH2 > MAX_RH_STEP) outRH2 = prevOutRH2 + MAX_RH_STEP;
+				if (deltaRH2 < -MAX_RH_STEP) outRH2 = prevOutRH2 - MAX_RH_STEP;
+				prevOutRH1 = outRH1;
+				prevOutRH2 = outRH2;
+				// Clamp offsets
+				if (outRH1 > RH_OFFSET_MAX) outRH1 = RH_OFFSET_MAX;
+				if (outRH1 < RH_OFFSET_MIN) outRH1 = RH_OFFSET_MIN;
+				if (outRH2 > RH_OFFSET_MAX) outRH2 = RH_OFFSET_MAX;
+				if (outRH2 < RH_OFFSET_MIN) outRH2 = RH_OFFSET_MIN;
+				HDC302x_SetOffset(&Sensor1, outT1, outRH1);
+				HDC302x_SetOffset(&Sensor2, outT2, outRH2);
+				// ENVIRONMENT OUTPUT - Apply corrections
+				temp1 = temp1 + outT1;
+				temp2 = temp2 + outT2;
+				rh1 = rh1 + outRH1;
+				rh2 = rh2 + outRH2;
+				txFrameBuf.Payload.externalData.Temperature = (temp1 + temp2 + BMP581_Data.temperature) / 3.0f;
+				txFrameBuf.Payload.externalData.RH = (rh1 + rh2) * 0.5f;
+				txFrameBuf.Payload.externalData.Pressure = BMP581_Data.pressure;
+				ENS160_SetEnvCompensation(txFrameBuf.Payload.externalData.Temperature, txFrameBuf.Payload.externalData.RH);
+				Wind_ComputeSoundSpeed();
+				sensorReadyFlags |= SENSOR_ENV;
 			}
 			
 			if (AS3935_Ready) {
@@ -380,6 +442,10 @@ int main(void)
 					SendDataToESP();
 					sensorReadyFlags = 0; // keep lightning if present
 			}
+			
+			// ToDo Implement the data received from ESP
+			// extern Wind_Input_t CalibData; from Wind library
+			// The Reset functionality
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
