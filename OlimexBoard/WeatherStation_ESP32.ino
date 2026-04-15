@@ -100,19 +100,20 @@ static const char*    NTRIP_PASS       = "";
 // ==========================================================================
 // MQTT TOPICS  – one plain scalar value per topic
 // ==========================================================================
-
+// !!! Height as float should be sent to STM32
+// !!! Calibration distances for PGA will be stored on ESP and sent to STM
 // Environmental
 static const char* TOPIC_TEMP      = "weather/Temperature";       // float  degrees C
 static const char* TOPIC_RH        = "weather/RH";                // float  %
 static const char* TOPIC_PRES      = "weather/Pressure";          // float  hPa
-static const char* TOPIC_SP        = "weather/SoundSpeed";        // float  m/s
 static const char* TOPIC_DP        = "weather/DewPoint";          // float  degrees C
+static const char* TOPIC_SP        = "weather/SoundSpeed";        // float  m/s
 
 // UV (AS7331)
 static const char* TOPIC_UVT       = "weather/UVTemperature";     // uint16 (degrees C x 100)
-static const char* TOPIC_UVA       = "weather/UVA";               // uint16 counts
-static const char* TOPIC_UVB       = "weather/UVB";               // uint16 counts
-static const char* TOPIC_UVC       = "weather/UVC";               // uint16 counts
+static const char* TOPIC_UVA       = "weather/UVA";               // uint16
+static const char* TOPIC_UVB       = "weather/UVB";               // uint16
+static const char* TOPIC_UVC       = "weather/UVC";               // uint16
 
 // Colour light (TCS34003)
 static const char* TOPIC_LIGHT_C   = "weather/ClearChannel";      // uint16
@@ -175,10 +176,11 @@ static const char* TOPIC_STATUS    = "weather/status";            // "online" / 
 #define UART_FRAME_SOF_B1 0xAAu   // little-endian byte 1
 
 struct Wind_EnvData_t {
-    float Temperature;   // degrees C
-    float RH;            // %
-    float Pressure;      // hPa
-    float SoundSpeed;    // m/s
+    float Temperature;	// degrees C
+    float RH;			// %
+    float Pressure;		// hPa
+	float DewPoint;		// degrees C
+    float SoundSpeed;	// m/s
 } __attribute__((packed));
 
 struct Wind_t {
@@ -234,6 +236,14 @@ struct UART_Frame_t {
     uint16_t       Length;   // sizeof(UART_Payload_t)
     UART_Payload_t Payload;
     uint16_t       CR;       // CRC-16
+} __attribute__((packed));
+
+// These values will come from MQTT and sent via Serial to STM board after boot
+struct Wind_Input_t {
+    float Height;    // Altitude above sea level in metres (from GPS; 0 to use barometric estimate)
+    uint32_t PathLenD01; // Path length for transducer 0 in um
+	uint32_t PathLenD12; // Path length for transducer 1 in um
+	uint32_t PathLenD20; // Path length for transducer 2 in um
 } __attribute__((packed));
 
 static constexpr size_t FRAME_SIZE = sizeof(UART_Frame_t);
@@ -612,7 +622,12 @@ void setup() {
     } else {
         Serial.println("[GPS] LG290P NOT detected – check wiring and baud rate");
     }
-
+	// ToDo Add code to send to STM the Wind_Input_t structure
+	// containing the data stored on ESP from MQTT
+	// Add also the MQTT topics for them
+	// float Height;    // Altitude above sea level in metres will come from only MQTT, it will not be changed by STM board
+	// uint32_t PathLenD01, PathLenD12, PathLenD20 will come from STM when the calibration is done but they can also be set by MQTT
+	
     // --- Ethernet ---
     Network.onEvent(onEthEvent);
     ETH.begin();
