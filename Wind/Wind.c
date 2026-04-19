@@ -67,7 +67,6 @@ extern volatile uint8_t Decpl_RDY;
 	
 #define CONE_L_MM           158.114f					/* v(502+1502)    */
 #define CONE_L_UM           158114						/* L in um        */
-#define NOMINAL_PATH_UM     (2.0f * (float)CONE_L_UM)	/* 2 * CONE_L_UM */
 /*
  * Effective horizontal path unit vectors  *_ij = (pos_j - pos_i) / L
  *
@@ -175,10 +174,6 @@ static uint8_t g_tof_count[TOF_PATH_COUNT];           /* valid sample count   */
  * Sensor 0 stores D01, Sensor 1 stores D12, Sensor 2 stores D20.
  * Index i = transmitter index.  Populated by Wind_CalibrateReflector(). */
  
-// !!! ToDo Change g_pathLen_um from float to uint32_t since we have the distance in um
-// Or replace it with the 
-static float g_pathLen_um[3] = {NOMINAL_PATH_UM, NOMINAL_PATH_UM, NOMINAL_PATH_UM};
-
 Wind_EnvData_t externalData = {
 	.Temperature = 23.63f,	// degC
 	.RH          = 62.22f,	// %
@@ -187,7 +182,7 @@ Wind_EnvData_t externalData = {
 	.SoundSpeed  = 346.53f	// will be computed
 };
 
-Wind_Input_t CalibData = {
+Wind_Input_t calibData = {
 	.Height		= 500.0f,	// m
 	.PathLenD01	= 316228,	// um
 	.PathLenD12	= 316228,	// um
@@ -228,23 +223,22 @@ static inline void TIM2_Reset_DMA(void) {
  * @return None.
  */
 void Wind_ComputeSoundSpeed(void) {
-	if (!externalData) return SOUND_SPEED;
-	const float T_C = externalData->Temperature;
+	const float T_C = externalData.Temperature;
 	const float T_K = T_C + KELVIN_OFFSET;
 	// --- Pressure (hPa). If not provided, estimate from height with std. atmosphere ---
-	float P_hPa = externalData->Pressure;
+	float P_hPa = externalData.Pressure;
 	if (P_hPa <= 0.0) {
 		// Barometric formula (troposphere):
 		// P = P0 * (1 - L*h/T0)^(g*M/(R*L))  [Pa]
-		const float term = 1.0 - (L * CalibData->Height) / T0;
+		const float term = 1.0 - (L * calibData.Height) / T0;
 		const float expo = (G * M) / (R * L);
 		float P_Pa = P0 * pow(term, expo);
 		if (P_Pa < 1.0) P_Pa = 1.0; // guard
 		P_hPa = P_Pa * 0.01;        // convert Pa to hPa
-		externalData->Pressure = (float)P_hPa;
+		externalData.Pressure = (float)P_hPa;
 	}
 	// --- Relative humidity as fraction ---
-	const float RH_frac = externalData->RH / RH_DIVISOR;
+	const float RH_frac = externalData.RH / RH_DIVISOR;
 	// --- Saturation vapor pressure over water (Tetens, hPa) ---
 	// es = 6.1078 * exp(17.2693882 * T_C / (T_C + 237.3))
 	const float es = SATURATION_CONSTANT * expf(17.269f * T_C / (T_C + 237.3f));
@@ -258,9 +252,9 @@ void Wind_ComputeSoundSpeed(void) {
 	const float Tv = T_K * (1.0f + 0.6077f * q);
 	// Speed of sound in moist air: c = sqrt(gamma * Rd * Tv)
 	float c = sqrtf(GAMMA_R_D * Tv); 
-	externalData->SoundSpeed = c;
-	float gamma = ((DEW_POINT_CONST_A * env->Temperature) / (DEW_POINT_CONST_B + env->Temperature)) + logf(env->RH / 100.0f);
-	externalData->DewPoint = (DEW_POINT_CONST_B * gamma) / (DEW_POINT_CONST_A - gamma);
+	externalData.SoundSpeed = c;
+	float gamma = ((DEW_POINT_CONST_A * externalData.Temperature) / (DEW_POINT_CONST_B + externalData.Temperature)) + logf(externalData.RH / 100.0f);
+	externalData.DewPoint = (DEW_POINT_CONST_B * gamma) / (DEW_POINT_CONST_A - gamma);
 	return;
 }
 
@@ -529,7 +523,7 @@ void Wind_Init(void) {
  * @return HAL status.
  */
 HAL_StatusTypeDef Wind_CalibrateReflector(void) {
-    const float c = env->SoundSpeed;   /* 1 m/s = 1 um/us exactly */
+    const float c = externalData.SoundSpeed;   /* 1 m/s = 1 um/us exactly */
     DEBUG("Calibration start: c = %.4f m/s, N_CAL = %u\n", c, N_CAL);
     /*
      * Accumulators for the six one-way ToF sums (us).
@@ -583,13 +577,13 @@ HAL_StatusTypeDef Wind_CalibrateReflector(void) {
 	float t_avg_01 = (sum[0][0] + sum[1][0]) * 0.5f * inv_valid;
 	float t_avg_12 = (sum[1][1] + sum[2][1]) * 0.5f * inv_valid;
 	float t_avg_20 = (sum[2][0] + sum[0][1]) * 0.5f * inv_valid;
-    CalibData->PathLenD01 = c * t_avg_01 / TICKS_PER_US;   /* D_01 um, owned by sensor 0 */
-    CalibData->PathLenD12 = c * t_avg_12 / TICKS_PER_US;   /* D_12 um, owned by sensor 1 */
-    CalibData->PathLenD20 = c * t_avg_20 / TICKS_PER_US;   /* D_20 um, owned by sensor 2 */
+  calibData.PathLenD01 = c * t_avg_01 / TICKS_PER_US;   /* D_01 um, owned by sensor 0 */
+  calibData.PathLenD12 = c * t_avg_12 / TICKS_PER_US;   /* D_12 um, owned by sensor 1 */
+  calibData.PathLenD20 = c * t_avg_20 / TICKS_PER_US;   /* D_20 um, owned by sensor 2 */
 
 	// ToDo Send calibration data to ESP
-    DEBUG("Calibration complete (%u/%u cycles used)\n", valid, N_CAL);
-    return HAL_OK;
+  DEBUG("Calibration complete (%u/%u cycles used)\n", valid, N_CAL);
+  return HAL_OK;
 }
 
 /**
@@ -708,9 +702,9 @@ HAL_StatusTypeDef Wind_Measure(Wind_t *out) {
      * u_ij = (pos_j - pos_i) / L.  The units work out to m/s because
      * D_i is in um and t_ij is in us, and 1 um/us = 1 m/s exactly.
      *=========================================================================*/
-		float b01 = (g_pathLen_um[0] * TICKS_HALF) * (1.0f/t01 - 1.0f/t10);
-		float b12 = (g_pathLen_um[1] * TICKS_HALF) * (1.0f/t12 - 1.0f/t21);
-		float b20 = (g_pathLen_um[2] * TICKS_HALF) * (1.0f/t20 - 1.0f/t02);
+		float b01 = (calibData.PathLenD01 * TICKS_HALF) * (1.0f/t01 - 1.0f/t10);
+		float b12 = (calibData.PathLenD12 * TICKS_HALF) * (1.0f/t12 - 1.0f/t21);
+		float b20 = (calibData.PathLenD20 * TICKS_HALF) * (1.0f/t20 - 1.0f/t02);
     DEBUG("b01=%.4f b12=%.4f b20=%.4f m/s\n", b01, b12, b20);
     /*
      * Closed-form least-squares reconstruction (K = 20/9, exact for 120 deg layout):
