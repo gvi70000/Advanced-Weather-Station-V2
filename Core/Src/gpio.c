@@ -30,13 +30,13 @@
 /*----------------------------------------------------------------------------*/
 /* USER CODE BEGIN 1 */
 // Data-ready flag set by HAL_GPIO_EXTI_Callback on XXXX_INT_Pin
-volatile uint8_t AS3935_Ready = 0;
-volatile uint8_t AS7331_Ready = 0;
-volatile uint8_t ENS160_Ready = 0;
-volatile uint8_t BMP_Ready = 0;
-volatile uint8_t TCS34003_Ready = 0;
-volatile uint8_t TSL25911_Ready = 0;
-
+volatile uint8_t AS3935_Ready			= 0;
+volatile uint8_t AS7331_Ready			= 0;
+volatile uint8_t ENS160_Ready			= 0;
+volatile uint8_t BMP_Ready				= 0;
+volatile uint8_t TCS34003_Ready		= 0;
+volatile uint8_t TSL25911_Ready		= 0;
+volatile uint8_t ESP_Transmitting	= 0;
 /* USER CODE END 1 */
 
 /** Configure pins as
@@ -61,6 +61,12 @@ void MX_GPIO_Init(void)
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(RST_HDC_GPIO_Port, RST_HDC_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin : INT_AS3935_Pin */
+  GPIO_InitStruct.Pin = INT_AS3935_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(INT_AS3935_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : SGN_Pin */
   GPIO_InitStruct.Pin = SGN_Pin;
@@ -95,20 +101,17 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(SET_ESP_MSG_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : GET_ESP_MSG_Pin */
-  GPIO_InitStruct.Pin = GET_ESP_MSG_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GET_ESP_MSG_GPIO_Port, &GPIO_InitStruct);
-
   /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI4_IRQn, 0, 0);
+  HAL_NVIC_SetPriority(EXTI3_IRQn, 4, 0);
+  HAL_NVIC_EnableIRQ(EXTI3_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI4_IRQn, 4, 0);
   HAL_NVIC_EnableIRQ(EXTI4_IRQn);
 
-  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 4, 0);
   HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 
-  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 4, 0);
   HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
 }
@@ -120,39 +123,49 @@ void Enable_EXTI_AS3935(void) {
   GPIO_InitStruct.Pin = INT_AS3935_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_PULLDOWN;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);	
+  HAL_GPIO_Init(INT_AS3935_GPIO_Port, &GPIO_InitStruct);	
 	
   /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI0_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI0_IRQn);
+  HAL_NVIC_SetPriority(EXTI3_IRQn, 4, 0);
+  HAL_NVIC_EnableIRQ(EXTI3_IRQn);
 }
 
 void Disable_EXTI_AS3935(void) {
-	HAL_GPIO_DeInit(GPIOB, GPIO_PIN_0);	
-  HAL_NVIC_DisableIRQ(EXTI0_IRQn);
+	HAL_GPIO_DeInit(INT_AS3935_GPIO_Port, INT_AS3935_Pin);	
+  HAL_NVIC_DisableIRQ(EXTI3_IRQn);
 }
 
 // EXTI callback sets sensor ready flags
 // NOTE: HAL_GPIO_EXTI_IRQHandler already clears the pending bit. Do NOT call
 // __HAL_GPIO_EXTI_CLEAR_IT here; it can re-trigger the interrupt on some STM32F3 silicon.
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
-    if (GPIO_Pin == INT_AS3935_Pin) {
-        AS3935_Ready = 1;
-    }
-    if (GPIO_Pin == INT_AS7331_Pin) {
-        AS7331_Ready = 1;
-    }
-    if (GPIO_Pin == INT_ES160_Pin) {
-        ENS160_Ready = 1;
-    }			
-    if (GPIO_Pin == BMP_INT_Pin) {
-        BMP_Ready = 1;
-    }
-    if (GPIO_Pin == INT_TCS34003_Pin) {
-        TCS34003_Ready = 1;
-    }
-		if (GPIO_Pin == INT_TSL25911_Pin) {
-        TSL25911_Ready = 1;
-    }
+	// PA3
+	if (GPIO_Pin == INT_AS3935_Pin) {
+		AS3935_Ready = 1;
+	}
+	// PA12 - We will use RX TC interrupt and DMA circular
+//	if (GPIO_Pin == GET_ESP_MSG_Pin) {
+//		ESP_Transmitting = 1;
+//	}
+	// PB4
+	if (GPIO_Pin == INT_TCS34003_Pin) {
+		TCS34003_Ready = 1;
+	}
+	// PB6
+	if (GPIO_Pin == INT_TSL25911_Pin) {
+		TSL25911_Ready = 1;
+	}
+	// PB7
+	if (GPIO_Pin == INT_AS7331_Pin) {
+		AS7331_Ready = 1;
+	}
+	// PB14	
+	if (GPIO_Pin == BMP_INT_Pin) {
+		BMP_Ready = 1;
+	}
+	// PB15
+	if (GPIO_Pin == INT_ES160_Pin) {
+		ENS160_Ready = 1;
+	}
 }
 /* USER CODE END 2 */

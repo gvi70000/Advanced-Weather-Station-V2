@@ -73,7 +73,7 @@ void HAL_CORDIC_MspInit(CORDIC_HandleTypeDef* cordicHandle)
     hdma_cordic_read.Init.PeriphDataAlignment = DMA_PDATAALIGN_WORD;
     hdma_cordic_read.Init.MemDataAlignment = DMA_MDATAALIGN_WORD;
     hdma_cordic_read.Init.Mode = DMA_NORMAL;
-    hdma_cordic_read.Init.Priority = DMA_PRIORITY_LOW;
+    hdma_cordic_read.Init.Priority = DMA_PRIORITY_MEDIUM;
     if (HAL_DMA_Init(&hdma_cordic_read) != HAL_OK)
     {
       Error_Handler();
@@ -90,7 +90,7 @@ void HAL_CORDIC_MspInit(CORDIC_HandleTypeDef* cordicHandle)
     hdma_cordic_write.Init.PeriphDataAlignment = DMA_PDATAALIGN_WORD;
     hdma_cordic_write.Init.MemDataAlignment = DMA_MDATAALIGN_WORD;
     hdma_cordic_write.Init.Mode = DMA_NORMAL;
-    hdma_cordic_write.Init.Priority = DMA_PRIORITY_LOW;
+    hdma_cordic_write.Init.Priority = DMA_PRIORITY_MEDIUM;
     if (HAL_DMA_Init(&hdma_cordic_write) != HAL_OK)
     {
       Error_Handler();
@@ -99,7 +99,7 @@ void HAL_CORDIC_MspInit(CORDIC_HandleTypeDef* cordicHandle)
     __HAL_LINKDMA(cordicHandle,hdmaIn,hdma_cordic_write);
 
     /* CORDIC interrupt Init */
-    HAL_NVIC_SetPriority(CORDIC_IRQn, 0, 0);
+    HAL_NVIC_SetPriority(CORDIC_IRQn, 3, 0);
     HAL_NVIC_EnableIRQ(CORDIC_IRQn);
   /* USER CODE BEGIN CORDIC_MspInit 1 */
 
