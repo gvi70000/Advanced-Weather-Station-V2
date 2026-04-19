@@ -9,6 +9,7 @@
 #include "AS3935.h"
 #include "i2c.h"
 #include "tim.h"
+#include "gpio.h"
 #include "debug.h"
 #include <stdio.h>   /* printf — required when DEBUG_ENABLED=1 */
 #include <stdint.h>
@@ -480,7 +481,7 @@ AS3935_TuneCap_t AS3935_TuneAntenna(void) {
     AS3935_TuneCap_t bestCap  = AS3935_TUN_CAP_0pF;
     uint32_t minError = UINT32_MAX;
     /* Disable external interrupt to avoid spurious IRQ during tuning. */
-    /* Disable_EXTI_AS3935(); — call externally if needed               */
+    Disable_EXTI_AS3935(); // — call externally if needed
 
     /* LCO divider must be /16 before routing LCO to the IRQ pin. */
     AS3935_SetFrequencyDivisionRatio(AS3935_LCO_FDIV_16);
@@ -531,5 +532,6 @@ AS3935_TuneCap_t AS3935_TuneAntenna(void) {
     AS3935_Sensor.IRQ.Val.BitField.OSC_DISP = AS3935_OSC_NONE;
     AS3935_WriteReg(AS3935_REG_FREQ_DISP_IRQ, (uint8_t *)&AS3935_Sensor.IRQ.Val.Value, 1);
     DEBUG("AS3935: Best cap = %d  score = %lu ppm\n", (int)bestCap, (unsigned long)minError);
+		Enable_EXTI_AS3935();
     return bestCap;
 }
