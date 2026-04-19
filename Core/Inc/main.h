@@ -65,6 +65,7 @@ void Error_Handler(void);
 #define DECPL2_GPIO_Port GPIOA
 #define INT_AS3935_Pin GPIO_PIN_3
 #define INT_AS3935_GPIO_Port GPIOA
+#define INT_AS3935_EXTI_IRQn EXTI3_IRQn
 #define SGN_Pin GPIO_PIN_5
 #define SGN_GPIO_Port GPIOA
 #define UST_RX_Pin GPIO_PIN_10
@@ -85,9 +86,6 @@ void Error_Handler(void);
 #define ESP_TX_GPIO_Port GPIOA
 #define SET_ESP_MSG_Pin GPIO_PIN_11
 #define SET_ESP_MSG_GPIO_Port GPIOA
-#define GET_ESP_MSG_Pin GPIO_PIN_12
-#define GET_ESP_MSG_GPIO_Port GPIOA
-#define GET_ESP_MSG_EXTI_IRQn EXTI15_10_IRQn
 #define INT_TCS34003_Pin GPIO_PIN_4
 #define INT_TCS34003_GPIO_Port GPIOB
 #define INT_TCS34003_EXTI_IRQn EXTI4_IRQn
@@ -101,6 +99,10 @@ void Error_Handler(void);
 /* USER CODE BEGIN Private defines */
 #define HDC_RST_On RST_HDC_GPIO_Port->BSRR = (uint32_t)RST_HDC_Pin;
 #define HDC_RST_Off RST_HDC_GPIO_Port->BRR = (uint32_t)RST_HDC_Pin;
+
+#define STM_START_TX	SET_ESP_MSG_GPIO_Port->BSRR = (uint32_t)SET_ESP_MSG_Pin;
+#define STM_STOP_TX		SET_ESP_MSG_GPIO_Port->BRR	= (uint32_t)SET_ESP_MSG_Pin;
+
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

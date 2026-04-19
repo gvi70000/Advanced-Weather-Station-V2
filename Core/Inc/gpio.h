@@ -39,8 +39,13 @@ extern "C" {
 void MX_GPIO_Init(void);
 
 /* USER CODE BEGIN Prototypes */
+extern volatile uint8_t AS3935_Ready;
+extern volatile uint8_t AS7331_Ready;
+extern volatile uint8_t ENS160_Ready;
 extern volatile uint8_t BMP_Ready;
 extern volatile uint8_t TCS34003_Ready;
+extern volatile uint8_t TSL25911_Ready;
+extern volatile uint8_t ESP_Transmitting;
 
 void Enable_EXTI_AS3935(void);
 void Disable_EXTI_AS3935(void);
