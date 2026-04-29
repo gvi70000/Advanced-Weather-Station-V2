@@ -63,10 +63,14 @@ void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(RST_HDC_GPIO_Port, RST_HDC_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin : INT_AS3935_Pin */
+  /* IRQ mode: plain EXTI rising-edge.
+   * CALIB mode: PA3 is claimed by TIM2 CH4 (AF1) inside MX_TIM2_Init — skip EXTI. */
+#ifdef AS3935_MODE_IRQ
   GPIO_InitStruct.Pin = INT_AS3935_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(INT_AS3935_GPIO_Port, &GPIO_InitStruct);
+#endif /* AS3935_MODE_IRQ */
 
   /*Configure GPIO pin : SGN_Pin */
   GPIO_InitStruct.Pin = SGN_Pin;
@@ -102,8 +106,10 @@ void MX_GPIO_Init(void)
   HAL_GPIO_Init(SET_ESP_MSG_GPIO_Port, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
+#ifdef AS3935_MODE_IRQ
   HAL_NVIC_SetPriority(EXTI3_IRQn, 4, 0);
   HAL_NVIC_EnableIRQ(EXTI3_IRQn);
+#endif /* AS3935_MODE_IRQ */
 
   HAL_NVIC_SetPriority(EXTI4_IRQn, 4, 0);
   HAL_NVIC_EnableIRQ(EXTI4_IRQn);
@@ -117,6 +123,9 @@ void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 2 */
+/* In AS3935_MODE_CALIB PA3 belongs to TIM2 CH4 (AF1).
+ * Enable/Disable are no-ops in that mode; the pin is managed by tim.c. */
+#ifdef AS3935_MODE_IRQ
 void Enable_EXTI_AS3935(void) {
 	GPIO_InitTypeDef GPIO_InitStruct = {0};
   /*Configure GPIO pins : INT_AS3935_Pin */
@@ -134,19 +143,21 @@ void Disable_EXTI_AS3935(void) {
 	HAL_GPIO_DeInit(INT_AS3935_GPIO_Port, INT_AS3935_Pin);	
   HAL_NVIC_DisableIRQ(EXTI3_IRQn);
 }
+#else /* AS3935_MODE_CALIB */
+void Enable_EXTI_AS3935(void)  { /* no-op: PA3 is TIM2 CH4 in CALIB mode */ }
+void Disable_EXTI_AS3935(void) { /* no-op: PA3 is TIM2 CH4 in CALIB mode */ }
+#endif /* AS3935_MODE_IRQ */
 
 // EXTI callback sets sensor ready flags
 // NOTE: HAL_GPIO_EXTI_IRQHandler already clears the pending bit. Do NOT call
 // __HAL_GPIO_EXTI_CLEAR_IT here; it can re-trigger the interrupt on some STM32F3 silicon.
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
-	// PA3
+	// PA3 — only active as EXTI in AS3935_MODE_IRQ; in CALIB mode PA3 is TIM2 CH4.
+#ifdef AS3935_MODE_IRQ
 	if (GPIO_Pin == INT_AS3935_Pin) {
 		AS3935_Ready = 1;
 	}
-	// PA12 - We will use RX TC interrupt and DMA circular
-//	if (GPIO_Pin == GET_ESP_MSG_Pin) {
-//		ESP_Transmitting = 1;
-//	}
+#endif /* AS3935_MODE_IRQ */
 	// PB4
 	if (GPIO_Pin == INT_TCS34003_Pin) {
 		TCS34003_Ready = 1;

@@ -332,13 +332,20 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
 }
 
 /* USER CODE BEGIN 1 */
+/* dmaTxBusy is owned by main.c; declared extern here so the shared
+ * HAL_UART_TxCpltCallback can clear it for the USART1 (ESP) channel. */
+extern volatile uint8_t dmaTxBusy;
+
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
     if (huart->Instance == USART3) {
-        // Mark DMA TX complete (used by PGA460 UART helper)
+        /* PGA460 DMA TX complete */
         ust_tx_done = 1;
-        // Debug marker: frame fully sent
         HAL_GPIO_WritePin(GPIOA, SGN_Pin, GPIO_PIN_SET);
+    }
+    else if (huart->Instance == USART1) {
+        /* ESP sensor frame DMA TX complete — deassert STM_IS_TX pin */
+        STM_STOP_TX;
+        dmaTxBusy = 0;
     }
 }
 /* USER CODE END 1 */
-
