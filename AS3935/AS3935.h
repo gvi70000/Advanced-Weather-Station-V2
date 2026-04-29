@@ -28,6 +28,7 @@
 #define AS3935_H
 
 #include "stm32g4xx_hal.h"
+#include "main.h"   /* AS3935_MODE_CALIB / AS3935_MODE_IRQ build-mode macros */
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -295,9 +296,10 @@ typedef enum {
  * Energy is a dimensionless 20-bit value (no physical unit).
  * Distance is decoded from REG0x07[5:0] — see AS3935_Distance_t.
  */
-typedef struct {
-    uint32_t LightningEnergy;   ///< 20-bit energy (REG0x04–0x06[4:0]).
-    uint8_t  DistanceEstimation;///< 6-bit distance code (REG0x07[5:0]).
+typedef struct __attribute__((packed)) {
+    uint32_t LightningEnergy;    ///< 20-bit energy (REG0x04–0x06[4:0]).
+    uint8_t  DistanceEstimation; ///< 6-bit distance code (REG0x07[5:0]) +
+                                 ///<  interrupt type in bits [7:4] on the wire.
 } AS3935_LightningData_t;
 
 /* =========================================================================
