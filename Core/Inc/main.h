@@ -97,6 +97,29 @@ void Error_Handler(void);
 #define INT_AS7331_EXTI_IRQn EXTI9_5_IRQn
 
 /* USER CODE BEGIN Private defines */
+/* =========================================================================
+ * AS3935 pin-routing mode — define exactly ONE of the two macros below.
+ *
+ *   AS3935_MODE_IRQ    —  PA3 = EXTI rising-edge (normal operation).
+ *                          AS3935_Ready flag set in HAL_GPIO_EXTI_Callback.
+ *                          AS3935_TuneAntenna() must NOT be called.
+ *
+ *   AS3935_MODE_CALIB  —  PA3 = TIM2 CH4 AF1 (antenna tuning session only).
+ *                          AS3935_TuneAntenna() is available.
+ *                          EXTI3 / AS3935_Ready are NOT active.
+ *
+ * After tuning: note the best cap value from the debug log, optionally
+ * hard-code it in AS3935_Init(), then switch back to AS3935_MODE_IRQ.
+ * ======================================================================= */
+#define AS3935_MODE_IRQ       /* <-- swap to AS3935_MODE_CALIB for tuning */
+
+#if defined(AS3935_MODE_CALIB) && defined(AS3935_MODE_IRQ)
+  #error "AS3935: define either AS3935_MODE_CALIB or AS3935_MODE_IRQ, not both."
+#endif
+#if !defined(AS3935_MODE_CALIB) && !defined(AS3935_MODE_IRQ)
+  #error "AS3935: define either AS3935_MODE_CALIB or AS3935_MODE_IRQ."
+#endif
+
 #define HDC_RST_On RST_HDC_GPIO_Port->BSRR = (uint32_t)RST_HDC_Pin;
 #define HDC_RST_Off RST_HDC_GPIO_Port->BRR = (uint32_t)RST_HDC_Pin;
 

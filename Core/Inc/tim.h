@@ -30,12 +30,20 @@ extern "C" {
 
 /* USER CODE BEGIN Includes */
 typedef struct __attribute__((packed)) {
-    uint32_t	E0;	// Rising Edge recorded on broadcasting BURST_AND_LISTEN_P2
-    uint32_t	E1;	// Rising Edge recorded on BURST_AND_LISTEN_PRESET1 for specific Tx
+    uint32_t E0;  /* Rising edge captured on BROADCAST_LISTEN_ONLY_P2 (reference, discarded) */
+    uint32_t E1;  /* Rising edge captured on echo threshold crossing (acoustic arrival time)  */
 } DecplTimes_t;
 
-extern volatile DecplTimes_t  ToF_Result[3];  
-extern volatile uint8_t Decpl_RDY;
+extern volatile DecplTimes_t ToF_Result[3];
+extern volatile uint8_t      Decpl_RDY;
+
+/* -----------------------------------------------------------------------
+ * Wind_TIM2_Arm  -- stop, RM0440-compliant DMA reload, re-arm, start.
+ * Wind_TIM2_Disarm -- stop timer and all three DMA channels.
+ * Call Arm() before each PGA460 transmitter round; Disarm() after.
+ * -------------------------------------------------------------------- */
+void Wind_TIM2_Arm(void);
+void Wind_TIM2_Disarm(void);
 /* USER CODE END Includes */
 
 extern TIM_HandleTypeDef htim2;
@@ -55,4 +63,3 @@ void MX_TIM2_Init(void);
 #endif
 
 #endif /* __TIM_H__ */
-
