@@ -104,7 +104,7 @@ extern volatile uint8_t Decpl_RDY;
 /* CORDIC output for PHASE: angle/p in Q1.31 multiply by p to get radians	*/
 #define INV_Q31_TO_PI       1.46291807927e-9f	/* p / (2^31 - 1)           */
 
-/* CORDIC PHASE output [-1,+1] maps to [-180°,+180°]	*/
+/* CORDIC PHASE output [-1,+1] maps to [-180?,+180?]	*/
 #define CORDIC_PHASE_TO_DEG   180.0f   
 
 #define CORDIC_Q31_INV_TO_DEG   (CORDIC_PHASE_TO_DEG * Q31_INV)
@@ -114,13 +114,14 @@ extern volatile uint8_t Decpl_RDY;
 #define N_CAL               16     /* number of sample pairs to average    */
 #define CAL_PAIR_DELAY_MS   100    /* inter-pair delay during calibration   */
 
-// If PSC = 16 (10 MHz timer)
-#define TICKS_PER_US	10.0f // because it has to be divided by 2, 10/2=5
-#define TICKS_HALF		(0.5f * TICKS_PER_US)
+// TIM2: 170 MHz clock, PSC = 16  =>  tick = 100 ns  (10 ticks per us)
+#define TICKS_PER_US    10.0f   /* 10 ticks = 1 us                          */
+#define TICKS_HALF      (0.5f / TICKS_PER_US)   /* 0.05: converts ticks->us then halves */
 
-// TIM2 is 170MHz on STM32G431 and is setup to have 1us period
-#define TOF_MIN_TICKS	4000
-#define TOF_MAX_TICKS	20000
+// ToF window: path ~158 mm at 306..496 m/s => 319..517 us => 3190..5170 ticks
+// Add generous margin: 2000..8000 ticks (200..800 us)
+#define TOF_MIN_TICKS   2000u
+#define TOF_MAX_TICKS   8000u
 
 
 /*===========================================================================
@@ -189,24 +190,9 @@ Wind_Input_t calibData = {
 	.PathLenD20	= 316228,	// um
 };
 
-static void TIM2_IC_Start_All(void) {
-    __HAL_TIM_DISABLE(&htim2);
-    __HAL_TIM_SET_COUNTER(&htim2, 0);
-    __HAL_TIM_ENABLE(&htim2);
-}
-
-static void TIM2_IC_Stop_All(void) {
-    __HAL_TIM_DISABLE(&htim2);
-}
-
-static inline void TIM2_Reset_DMA(void) {
-    for (int i = 0; i < 3; i++) {
-        DMA_HandleTypeDef *hdma = htim2.hdma[i];
-        __HAL_DMA_DISABLE(hdma);
-        hdma->Instance->CNDTR = 2;
-        __HAL_DMA_ENABLE(hdma);
-    }
-}
+/* TIM2 arm/disarm are now implemented in tim.c (Wind_TIM2_Arm / Wind_TIM2_Disarm).
+ * They handle RM0440-compliant DMA reload (EN poll + flag clear + CNDTR write)
+ * and the synchronised counter reset in a single call.  No local helpers needed. */
 
 /**
  * @brief Compute speed of sound in moist air from environmental data.
@@ -218,24 +204,36 @@ static inline void TIM2_Reset_DMA(void) {
  *			Uses the Magnus-Tetens approximation:
  *            gamma = (A * T / (B + T)) + ln(RH / 100)
  *            Td    = B * gamma / (A - gamma)
- *          where A = DEW_POINT_CONST_A (17.27), B = DEW_POINT_CONST_B (237.7 °C).
+ *          where A = DEW_POINT_CONST_A (17.27), B = DEW_POINT_CONST_B (237.7 ?C).
  * @param None.
  * @return None.
  */
 void Wind_ComputeSoundSpeed(void) {
 	const float T_C = externalData.Temperature;
 	const float T_K = T_C + KELVIN_OFFSET;
-	// --- Pressure (hPa). If not provided, estimate from height with std. atmosphere ---
+
+	/* --- Pressure (hPa) ---
+	 * Primary source: BMP581 measured pressure (externalData.Pressure).
+	 * This is always more accurate than any model because it reflects the
+	 * actual atmosphere at the measurement moment.
+	 *
+	 * Fallback: when BMP581 is not yet ready (P <= 0), estimate pressure
+	 * from GPS RTK altitude (calibData.Height) using the ISA troposphere
+	 * barometric formula.  RTK altitude is used here because it is far more
+	 * accurate than a barometric altimeter for this purpose.
+	 * If GPS altitude is also unavailable (Height == 0) sea-level standard
+	 * pressure is used as a last resort.                                      */
 	float P_hPa = externalData.Pressure;
-	if (P_hPa <= 0.0) {
-		// Barometric formula (troposphere):
-		// P = P0 * (1 - L*h/T0)^(g*M/(R*L))  [Pa]
-		const float term = 1.0 - (L * calibData.Height) / T0;
-		const float expo = (G * M) / (R * L);
-		float P_Pa = P0 * pow(term, expo);
-		if (P_Pa < 1.0) P_Pa = 1.0; // guard
-		P_hPa = P_Pa * 0.01;        // convert Pa to hPa
-		externalData.Pressure = (float)P_hPa;
+	if (P_hPa <= 0.0f) {
+		if (calibData.Height > 0.0f) {
+			/* ISA troposphere: P = P0 * (1 - L*h/T0)^(g*M/(R*L))  [Pa]    */
+			const float term  = 1.0f - (L * calibData.Height) / T0;
+			const float expo  = (G * M) / (R * L);
+			P_hPa = P0 * powf(fmaxf(term, 1e-6f), expo) * 0.01f; /* ? hPa */
+		} else {
+			P_hPa = P0 * 0.01f;   /* 1013.25 hPa — sea-level standard      */
+		}
+		externalData.Pressure = P_hPa;
 	}
 	// --- Relative humidity as fraction ---
 	const float RH_frac = externalData.RH / RH_DIVISOR;
@@ -297,16 +295,22 @@ static void filter_insert(ToFPath_t path, float tof_us) {
  * @param path  Path index (see ToFPath_t).
  * @return Median ToF in us, or 0.0f if no samples are present.
  */
-static float filter_median(ToFPath_t path){
+static float filter_median(ToFPath_t path) {
     uint8_t n = g_tof_count[path];
     if (n == 0) { return 0.0f; }
-    /* Local copy -- do not disturb the circular buffer */
-    float tmp[N_FILT];
+
+    /* Copy the n most-recent samples in chronological order.
+     * g_tof_head[path] is the NEXT write slot, so the oldest of the n
+     * live samples is at index (head - n + N_FILT) % N_FILT.
+     * We copy into a local array then sort; order in tmp[] doesn't matter
+     * for median, but starting from the oldest gives a predictable layout. */
+    float   tmp[N_FILT];
+    uint8_t start = (uint8_t)((g_tof_head[path] + N_FILT - n) % N_FILT);
     for (uint8_t i = 0; i < n; i++) {
-        tmp[i] = g_tof_buf[path][i];
+        tmp[i] = g_tof_buf[path][(start + i) % N_FILT];
     }
 
-    /* Insertion sort (ascending) */
+    /* Insertion sort (ascending) -- max 5 elements, max 10 compare-swaps */
     for (uint8_t i = 1; i < n; i++) {
         float   key = tmp[i];
         uint8_t j   = i;
@@ -433,80 +437,68 @@ static HAL_StatusTypeDef wait_decpl_ready(uint32_t timeout_ms) {
  * @param tof_rx2_ticks  Output: one-way ToF to second receiver in us.
  * @return HAL_OK, HAL_ERROR (invalid ToF), or HAL_TIMEOUT (no DECPL response).
  */
-static HAL_StatusTypeDef run_one_measurement(uint8_t tx, float  *tof_rx1_ticks, float  *tof_rx2_ticks) {
+static HAL_StatusTypeDef run_one_measurement(uint8_t tx, float *tof_rx1_ticks, float *tof_rx2_ticks) {
     uint8_t rx1 = (tx == 0) ? 1 : 0;
-    uint8_t rx2 = (uint8_t)(3 - tx - rx1);
-    /*
-     * Reset state BEFORE arming DMA.
-     * DECPL_ResetReadyFlag() disables interrupts briefly to prevent a stale
-     * TC from an aborted previous measurement from instantly asserting Decpl_RDY.
-     * The chan_done bitmask in the callback is cleared by Decpl_RDY going to 0
-     * and the callback accumulator resetting on the next full mask match, but
-     * the explicit flag reset here is sufficient - the bitmask itself is reset
-     * inside the callback when the mask completes.
-     */
-			// Reset state
-			Decpl_RDY = 0;
-			memset((void *)ToF_Result, 0, sizeof(ToF_Result));
-			// Reset DMA counters
-			TIM2_Reset_DMA();
-			// Start all channels synchronously
-			TIM2_IC_Start_All();
-		
+    uint8_t rx2 = (uint8_t)(3u - tx - rx1);
+
+    /* Arm: stops timer, RM0440-compliant DMA reload, resets flags/buffers,
+     * re-arms DMA, zeros counter, starts timer.  All in one atomic sequence. */
+    Wind_TIM2_Arm();
+
     /*
      * Command sequence:
      *
-     * 1. Broadcast LISTEN_ONLY P2 to all sensors (noWait=1).
-     *    All three PGA460 DECPL pins assert within ~1 UART byte time of each
-     *    other.  Each DMA captures this as E0 (reference, discarded later).
-     *    The transmitter is now also armed in listen mode for P2 - this is
-     *    intentional: its DECPL will fire again when the P1 burst ends (E1).
+     * 1. Broadcast LISTEN_ONLY P2 (noWait=1).
+     *    All three DECPL pins assert within ~1 UART byte of each other.
+     *    DMA captures this as E0 on every channel (reference, discarded).
      *
      * 2. BURST_AND_LISTEN P1 on the transmitter (noWait=1).
-     *    Tx fires 6 pulses.  At the end of the Tx decouple period, its DECPL
-     *    asserts again ? captured as ToF_Result[tx].E1 (= T_burst reference).
-     *    The two receivers listen; when each detects its echo threshold
-     *    crossing, its DECPL asserts ? captured as ToF_Result[rx].E1.
+     *    Tx fires 6 pulses; its DECPL asserts at burst-end -> E1[tx].
+     *    Receivers detect echo threshold crossing -> E1[rx1], E1[rx2].
      */
-    PGA460_UltrasonicCmd(rx1, PGA460_CMD_BROADCAST_LISTEN_ONLY_P2, 1); // sensorID irrelevant for broadcast
+    PGA460_UltrasonicCmd(rx1, PGA460_CMD_BROADCAST_LISTEN_ONLY_P2, 1);
     PGA460_UltrasonicCmd(tx,  PGA460_CMD_BURST_AND_LISTEN_PRESET1, 1);
-    /* --- Wait for all three DECPL TC interrupts via bitmask callback --- */
+
+    /* Wait for all three DMA TCs (10 ms = 100 x expected ~1 ms window) */
     if (wait_decpl_ready(10) != HAL_OK) {
-        // Stop timer, all captures stop instantly
-				TIM2_IC_Stop_All();
-        DEBUG("Tx%u: DECPL timeout - check DECPL wiring and P1/P2 config\n", tx);
+        Wind_TIM2_Disarm();
+        DEBUG("Tx%u: DECPL timeout\n", tx);
         return HAL_TIMEOUT;
     }
-    // Stop timer, all captures stop instantly
-    TIM2_IC_Stop_All();
+    Wind_TIM2_Disarm();
+
     /*
-     * Extract timestamps:
-     *   E1[tx]  = end of Tx burst decouple period  ? acoustic start
-     *   E1[rx]  = echo threshold crossing           ? acoustic arrival
-     *
-     * Unsigned subtraction is wrap-safe for any delta < 2^31 ticks (~12.6 s).
-     * The measurement window (< 2 ms) is orders of magnitude shorter.
+     * Extract timestamps.
+     * E1[tx]  = end of Tx burst decouple period = acoustic t0
+     * E1[rx]  = echo threshold crossing          = acoustic arrival
+     * Unsigned subtraction is wrap-safe for any delta < 2^31 ticks (~214 s).
      */
-    uint32_t t_burst  = ToF_Result[tx].E1;
-    uint32_t t_echo1  = ToF_Result[rx1].E1;
-    uint32_t t_echo2  = ToF_Result[rx2].E1;
-    uint32_t delta1 = t_echo1 - t_burst;   /* unsigned wrap-safe subtraction */
-    uint32_t delta2 = t_echo2 - t_burst;
-    if (delta1 < TOF_MIN_TICKS || delta1 > TOF_MAX_TICKS || delta2 < TOF_MIN_TICKS || delta2 > TOF_MAX_TICKS) {
-        DEBUG("Tx%u: ToF ticks out of range (d1=%d, d2=%d) - expected %d..%d\n", tx, delta1, delta2, TOF_MIN_TICKS, TOF_MAX_TICKS);
+    uint32_t t_burst = ToF_Result[tx].E1;
+    uint32_t t_echo1 = ToF_Result[rx1].E1;
+    uint32_t t_echo2 = ToF_Result[rx2].E1;
+    uint32_t delta1  = t_echo1 - t_burst;
+    uint32_t delta2  = t_echo2 - t_burst;
+
+    if (delta1 < TOF_MIN_TICKS || delta1 > TOF_MAX_TICKS ||
+        delta2 < TOF_MIN_TICKS || delta2 > TOF_MAX_TICKS) {
+        DEBUG("Tx%u: ToF ticks out of range (d1=%lu, d2=%lu) expected %u..%u\n",
+              tx, (unsigned long)delta1, (unsigned long)delta2,
+              TOF_MIN_TICKS, TOF_MAX_TICKS);
         return HAL_ERROR;
     }
-		*tof_rx1_ticks = (float)delta1;   /* ticks, 100 ns resolution */
-		*tof_rx2_ticks = (float)delta2;   /* ticks, 100 ns resolution */
+    *tof_rx1_ticks = (float)delta1;   /* ticks, 100 ns resolution */
+    *tof_rx2_ticks = (float)delta2;
     return HAL_OK;
 }
 
 void Wind_Init(void) {
-	ResetFilter();
-	HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_1, (uint32_t *)&ToF_Result[0].E0, 2);
-	HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_2, (uint32_t *)&ToF_Result[1].E0, 2);
-	HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_3, (uint32_t *)&ToF_Result[2].E0, 2);
-	__HAL_TIM_DISABLE(&htim2);
+    ResetFilter();
+    /* Arm then immediately disarm: this performs the RM0440-compliant DMA
+     * setup (Stop -> EN poll -> flag clear -> CNDTR=2 -> Start_DMA) and
+     * leaves the timer stopped and DMA channels armed-but-paused, ready for
+     * the first call to run_one_measurement().                              */
+    Wind_TIM2_Arm();
+    Wind_TIM2_Disarm();
 }
 
 /**
@@ -574,12 +566,15 @@ HAL_StatusTypeDef Wind_CalibrateReflector(void) {
      *   D_20  stored in sensor 2  (t_20 = sum[2][0], t_02 = sum[0][1])
      */
     /* Average ToF per pair (us) */
-	float t_avg_01 = (sum[0][0] + sum[1][0]) * 0.5f * inv_valid;
-	float t_avg_12 = (sum[1][1] + sum[2][1]) * 0.5f * inv_valid;
-	float t_avg_20 = (sum[2][0] + sum[0][1]) * 0.5f * inv_valid;
-  calibData.PathLenD01 = c * t_avg_01 / TICKS_PER_US;   /* D_01 um, owned by sensor 0 */
-  calibData.PathLenD12 = c * t_avg_12 / TICKS_PER_US;   /* D_12 um, owned by sensor 1 */
-  calibData.PathLenD20 = c * t_avg_20 / TICKS_PER_US;   /* D_20 um, owned by sensor 2 */
+    /* Average ToF per pair (ticks).  Convert to us: divide by TICKS_PER_US.
+     * D_ij = c [um/us] * t_avg [us]  =>  D_ij [um]
+     * c is in m/s = um/us exactly.                                          */
+    float t_avg_01 = (sum[0][0] + sum[1][0]) * 0.5f * inv_valid / TICKS_PER_US;  /* us */
+    float t_avg_12 = (sum[1][1] + sum[2][1]) * 0.5f * inv_valid / TICKS_PER_US;  /* us */
+    float t_avg_20 = (sum[2][0] + sum[0][1]) * 0.5f * inv_valid / TICKS_PER_US;  /* us */
+    calibData.PathLenD01 = (uint32_t)(c * t_avg_01);   /* D_01 um, owned by sensor 0 */
+    calibData.PathLenD12 = (uint32_t)(c * t_avg_12);   /* D_12 um, owned by sensor 1 */
+    calibData.PathLenD20 = (uint32_t)(c * t_avg_20);   /* D_20 um, owned by sensor 2 */
 
 	// ToDo Send calibration data to ESP
   DEBUG("Calibration complete (%u/%u cycles used)\n", valid, N_CAL);
@@ -702,9 +697,14 @@ HAL_StatusTypeDef Wind_Measure(Wind_t *out) {
      * u_ij = (pos_j - pos_i) / L.  The units work out to m/s because
      * D_i is in um and t_ij is in us, and 1 um/us = 1 m/s exactly.
      *=========================================================================*/
-		float b01 = (calibData.PathLenD01 * TICKS_HALF) * (1.0f/t01 - 1.0f/t10);
-		float b12 = (calibData.PathLenD12 * TICKS_HALF) * (1.0f/t12 - 1.0f/t21);
-		float b20 = (calibData.PathLenD20 * TICKS_HALF) * (1.0f/t20 - 1.0f/t02);
+    /* b_ij = (D_ij/2) * (1/t_ij - 1/t_ji)  [um/us = m/s]
+     * t_ij is in ticks.  TICKS_HALF = 0.5/TICKS_PER_US converts:
+     *   D[um] * TICKS_HALF * (1/t[ticks] - 1/t[ticks])
+     *   = D * (0.5/TICKS_PER_US) * (1/t - 1/t)  [um * us/tick / ticks]
+     *   = D * 0.5 * (1/t_us - 1/t_us)  [um/us = m/s]  ?               */
+    float b01 = (calibData.PathLenD01 * TICKS_HALF) * (1.0f/t01 - 1.0f/t10);
+    float b12 = (calibData.PathLenD12 * TICKS_HALF) * (1.0f/t12 - 1.0f/t21);
+    float b20 = (calibData.PathLenD20 * TICKS_HALF) * (1.0f/t20 - 1.0f/t02);
     DEBUG("b01=%.4f b12=%.4f b20=%.4f m/s\n", b01, b12, b20);
     /*
      * Closed-form least-squares reconstruction (K = 20/9, exact for 120 deg layout):
