@@ -378,6 +378,11 @@ typedef struct __attribute__((packed)) {
 // -----------------------------------------------------------------
 // Public function prototypes
 // -----------------------------------------------------------------
+// @brief Get a pointer to the EEImage_t of a sensor so callers (e.g. Wind.c) can
+//        read/write UserData without exposing the internal sensors[] array.
+// @param sensorID  Sensor UART address (0-7).
+// @return Pointer to sensors[sensorID].Registers.EEData, or NULL if sensorID is out of range.
+EEImage_t *PGA460_GetEEData(uint8_t sensorID);
 
 // Initialisation
 // @brief Initialise all sensors, write threshold maps, and optionally burn EEPROM.
@@ -418,6 +423,14 @@ HAL_StatusTypeDef PGA460_CheckStatus(uint8_t sensorID);
 // @param sensorID  Sensor UART address (0-7).
 // @return HAL status.
 HAL_StatusTypeDef PGA460_EEPROMBulkWrite(uint8_t sensorID);
+
+// @brief Bulk-read the 44-byte EEPROM image from device into sensors[sensorID].Registers.EEData.
+// @details Sends CMD 0x0B and receives [DIAG][44 EEData bytes][CHK] = 46 bytes.
+//          Call this during PGA460_Init() so UserData (path lengths) are available
+//          to Wind_LoadCalibration() before any measurement starts.
+// @param sensorID  Sensor UART address (0-7).
+// @return HAL status.
+HAL_StatusTypeDef PGA460_EEPROMBulkRead(uint8_t sensorID);
 
 // @brief Burn the current EEPROM image to non-volatile flash inside the PGA460.
 // @details Unlocks, triggers the internal charge pump, waits 1000 ms, and verifies EE_PRGM_OK.

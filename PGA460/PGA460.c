@@ -195,30 +195,33 @@ static const PGA460_Regs_t s2 = {
 PGA460_Sensor_t sensors[ULTRASONIC_SENSOR_COUNT] = {{ .Registers = s0 }, { .Registers = s1 }, { .Registers = s2 }};
 
 /**
- * @brief Read all EEPROM registers individually from a sensor and print them via printf.
- * @details Iterates through addresses 0x00-0x2B, reads each register with
- *          PGA460_RegisterRead(), and logs the named value.  Used during development
- *          to verify EEPROM contents after a bulk write or burn.
+ * @brief Read all EEPROM registers individually and log them via DEBUG().
+ * @details Iterates addresses 0x00-0x2B, reads each with PGA460_RegisterRead(),
+ *          and logs the named value.  Used during development to verify EEPROM
+ *          contents after a bulk write or burn.
+ *
+ *          ONLY compiled when DEBUG_PGA460 is defined — each register read
+ *          incurs a HAL_Delay(100), so the full scan takes ~4.4 s per sensor.
+ *          Never call this in production firmware.
  * @param sensorID  Sensor UART address (0-7).
  */
+#ifdef DEBUG_PGA460
 static void PGA460_ReadAndPrintEEPROM(uint8_t sensorID) {
-	printf("Reading and printing EEPROM registers for Sensor %u individually...\n", sensorID);
+	DEBUG("Reading EEPROM registers for Sensor %u...\n", sensorID);
 	uint8_t regValue = 0;
-	// EEPROM registers range from 0x00 to 0x2B
 	for (uint8_t regAddr = 0x00; regAddr <= 0x2B; ++regAddr) {
-		// Read the single register
 		if (PGA460_RegisterRead(sensorID, regAddr, &regValue) == HAL_OK) {
 			const char* regName;
 			switch (regAddr) {
-				case REG_USER_DATA1: regName = "USER_DATA1"; break;
-				case REG_USER_DATA2: regName = "USER_DATA2"; break;
-				case REG_USER_DATA3: regName = "USER_DATA3"; break;
-				case REG_USER_DATA4: regName = "USER_DATA4"; break;
-				case REG_USER_DATA5: regName = "USER_DATA5"; break;
-				case REG_USER_DATA6: regName = "USER_DATA6"; break;
-				case REG_USER_DATA7: regName = "USER_DATA7"; break;
-				case REG_USER_DATA8: regName = "USER_DATA8"; break;
-				case REG_USER_DATA9: regName = "USER_DATA9"; break;
+				case REG_USER_DATA1:  regName = "USER_DATA1";  break;
+				case REG_USER_DATA2:  regName = "USER_DATA2";  break;
+				case REG_USER_DATA3:  regName = "USER_DATA3";  break;
+				case REG_USER_DATA4:  regName = "USER_DATA4";  break;
+				case REG_USER_DATA5:  regName = "USER_DATA5";  break;
+				case REG_USER_DATA6:  regName = "USER_DATA6";  break;
+				case REG_USER_DATA7:  regName = "USER_DATA7";  break;
+				case REG_USER_DATA8:  regName = "USER_DATA8";  break;
+				case REG_USER_DATA9:  regName = "USER_DATA9";  break;
 				case REG_USER_DATA10: regName = "USER_DATA10"; break;
 				case REG_USER_DATA11: regName = "USER_DATA11"; break;
 				case REG_USER_DATA12: regName = "USER_DATA12"; break;
@@ -230,40 +233,41 @@ static void PGA460_ReadAndPrintEEPROM(uint8_t sensorID) {
 				case REG_USER_DATA18: regName = "USER_DATA18"; break;
 				case REG_USER_DATA19: regName = "USER_DATA19"; break;
 				case REG_USER_DATA20: regName = "USER_DATA20"; break;
-				case REG_TVGAIN0: regName = "REG_TVGAIN0"; break;
-				case REG_TVGAIN1: regName = "REG_TVGAIN1"; break;
-				case REG_TVGAIN2: regName = "REG_TVGAIN2"; break;
-				case REG_TVGAIN3: regName = "REG_TVGAIN3"; break;
-				case REG_TVGAIN4: regName = "REG_TVGAIN4"; break;
-				case REG_TVGAIN5: regName = "REG_TVGAIN5"; break;
-				case REG_TVGAIN6: regName = "REG_TVGAIN6"; break;
-				case REG_INIT_GAIN: regName = "REG_INIT_GAIN"; break;
-				case REG_FREQUENCY: regName = "REG_FREQUENCY"; break;
-				case REG_DEADTIME: regName = "REG_DEADTIME"; break;
-				case REG_PULSE_P1: regName = "REG_PULSE_P1"; break;
-				case REG_PULSE_P2: regName = "REG_PULSE_P2"; break;
-				case REG_CURR_LIM_P1: regName = "REG_CURR_LIM_P1"; break;
-				case REG_CURR_LIM_P2: regName = "REG_CURR_LIM_P2"; break;
-				case REG_REC_LENGTH: regName = "REG_REC_LENGTH"; break;
-				case REG_FREQ_DIAG: regName = "REG_FREQ_DIAG"; break;
-				case REG_SAT_FDIAG_TH: regName = "REG_SAT_FDIAG_TH"; break;
-				case REG_FVOLT_DEC: regName = "REG_FVOLT_DEC"; break;
-				case REG_DECPL_TEMP: regName = "REG_DECPL_TEMP"; break;
-				case REG_DSP_SCALE: regName = "DSP_SCALE"; break;
-				case REG_TEMP_TRIM: regName = "REG_TEMP_TRIM"; break;
-				case REG_P1_GAIN_CTRL: regName = "REG_P1_GAIN_CTRL"; break;
-				case REG_P2_GAIN_CTRL: regName = "REG_P2_GAIN_CTRL"; break;
-				case REG_EE_CRC: regName = "EE_CRC"; break;
-				default: regName = "UNKNOWN"; break;
+				case REG_TVGAIN0:     regName = "TVGAIN0";     break;
+				case REG_TVGAIN1:     regName = "TVGAIN1";     break;
+				case REG_TVGAIN2:     regName = "TVGAIN2";     break;
+				case REG_TVGAIN3:     regName = "TVGAIN3";     break;
+				case REG_TVGAIN4:     regName = "TVGAIN4";     break;
+				case REG_TVGAIN5:     regName = "TVGAIN5";     break;
+				case REG_TVGAIN6:     regName = "TVGAIN6";     break;
+				case REG_INIT_GAIN:   regName = "INIT_GAIN";   break;
+				case REG_FREQUENCY:   regName = "FREQUENCY";   break;
+				case REG_DEADTIME:    regName = "DEADTIME";    break;
+				case REG_PULSE_P1:    regName = "PULSE_P1";    break;
+				case REG_PULSE_P2:    regName = "PULSE_P2";    break;
+				case REG_CURR_LIM_P1: regName = "CURR_LIM_P1"; break;
+				case REG_CURR_LIM_P2: regName = "CURR_LIM_P2"; break;
+				case REG_REC_LENGTH:  regName = "REC_LENGTH";  break;
+				case REG_FREQ_DIAG:   regName = "FREQ_DIAG";   break;
+				case REG_SAT_FDIAG_TH:regName = "SAT_FDIAG_TH";break;
+				case REG_FVOLT_DEC:   regName = "FVOLT_DEC";   break;
+				case REG_DECPL_TEMP:  regName = "DECPL_TEMP";  break;
+				case REG_DSP_SCALE:   regName = "DSP_SCALE";   break;
+				case REG_TEMP_TRIM:   regName = "TEMP_TRIM";   break;
+				case REG_P1_GAIN_CTRL:regName = "P1_GAIN_CTRL";break;
+				case REG_P2_GAIN_CTRL:regName = "P2_GAIN_CTRL";break;
+				case REG_EE_CRC:      regName = "EE_CRC";      break;
+				default:              regName = "UNKNOWN";      break;
 			}
-			printf("  %s = %d;\n", regName, regValue);
+			DEBUG("  %s = 0x%02X\n", regName, regValue);
 		} else {
-			printf("  Address 0x%02X: FAILED to read\n", regAddr);
+			DEBUG("  0x%02X: read FAILED\n", regAddr);
 		}
 		HAL_Delay(100);
 	}
-	printf("EEPROM individual read complete.\n");
+	DEBUG("EEPROM read complete for sensor %u.\n", sensorID);
 }
+#endif /* DEBUG_PGA460 */
 
 /**
  * @brief Compute the PGA460 UART frame checksum.
@@ -317,28 +321,25 @@ static HAL_StatusTypeDef PGA460_SetEEPROMAccess(const uint8_t sensorID, const ui
 void PGA460_ScanAndReport(void) {
     uint8_t regValue = 0;
     uint8_t foundCount = 0;
-    printf("\n--- Starting PGA460 Bus Scan (Addresses 0-7) ---\n");
+    DEBUG("\n--- PGA460 Bus Scan (Addresses 0-7) ---\n");
     for (uint8_t addr = 0; addr <= 7; addr++) {
-        // We use a shorter timeout for scanning to keep it fast
         if (PGA460_RegisterRead(addr, REG_PULSE_P2, &regValue) == HAL_OK) {
-            foundCount++;            
-            // Extract the address bits [7:5] from the register value
+            foundCount++;
             uint8_t internalAddr = (regValue >> 5);
-            uint8_t pulseCount = (regValue & 0x1F);
-            printf("  [+] SENSOR FOUND at UART Address: %u\n", addr);
-            printf("      -> Internal Register Address: %u\n", internalAddr);
-            printf("      -> Pulse Count (P2): %u\n", pulseCount);
+            uint8_t pulseCount   = (regValue & 0x1F);
+            DEBUG("  [+] Sensor at UART addr %u  (stored addr=%u, P2 pulses=%u)\n",
+                  addr, internalAddr, pulseCount);
             if (addr != internalAddr) {
-                printf("      [!] WARNING: Address Mismatch! (Listening on %u, Stored as %u)\n", addr, internalAddr);
+                DEBUG("      [!] Address mismatch: listening on %u, register says %u\n",
+                      addr, internalAddr);
             }
         }
-        // Small delay to let the UART bus settle between pings
-        HAL_Delay(10); 
+        HAL_Delay(10);
     }
     if (foundCount == 0) {
-        printf("  [-] No sensors detected on the bus. Check power and wiring.\n");
+        DEBUG("  [-] No sensors detected. Check power and wiring.\n");
     } else {
-        printf("--- Scan Complete. Found %u sensor(s). ---\n\n", foundCount);
+        DEBUG("--- Scan complete: %u sensor(s) found ---\n\n", foundCount);
     }
 }
 
@@ -375,13 +376,12 @@ uint8_t foundAddr = 0xFF;
     uint8_t writeVal = (targetAddr << 5); 
     PGA460_RegisterWrite(foundAddr, REG_PULSE_P2, writeVal);
     HAL_Delay(50);
-    // 4. TI UNLOCK & BURN: Make it permanent
-    // We now talk to targetAddr because RAM update is instant
-    DEBUG("Burning Address %u to EEPROM...\n", targetAddr);  
-    // Unlock Sequence (Register 0x40)
-    PGA460_RegisterWrite(targetAddr, 0x40, 0x68);
-    PGA460_RegisterWrite(targetAddr, 0x40, 0x69);
-    // Command 22: EEPROM Burn
+    // 4. BURN: Commit new address to EEPROM permanently.
+    // PGA460_BurnEEPROM performs the full TI-specified two-step sequence
+    // (write 0x68, wait 1 ms, write 0x69, wait 1000 ms, verify EE_PRGM_OK).
+    // Do NOT write 0x68/0x69 manually here first — that would trigger two
+    // consecutive burn cycles, wasting one of the 1000 guaranteed EEPROM cycles.
+    DEBUG("Burning Address %u to EEPROM...\n", targetAddr);
     if (PGA460_BurnEEPROM(targetAddr) != HAL_OK) {
         DEBUG("Burn Command failed to send.\n");
         return HAL_ERROR;
@@ -395,6 +395,11 @@ uint8_t foundAddr = 0xFF;
     }
     DEBUG("SUCCESS: Sensor set to Address %u\n", targetAddr);
     return HAL_OK;
+}
+
+EEImage_t *PGA460_GetEEData(uint8_t sensorID) {
+    if (sensorID >= ULTRASONIC_SENSOR_COUNT) return NULL;
+    return &sensors[sensorID].Registers.EEData;
 }
 
 /**
@@ -418,7 +423,16 @@ HAL_StatusTypeDef PGA460_Init(uint8_t burnEEPROM) {
 			DEBUG("Sensor %u: Threshold write failed!\n", i);
 			return HAL_ERROR;
 		}
+		// Step 3: Read back full EEPROM image into sensors[i].Registers.EEData
+		// This populates UserData[0..3] so Wind_LoadCalibration() can read path lengths
+        if (PGA460_EEPROMBulkRead(i) != HAL_OK) {
+            DEBUG("Sensor %u: EEPROM bulk read failed, UserData will be zero\n", i);
+            // Non-fatal: Wind_LoadCalibration will fall back to NOMINAL_PATH_UM
+        }
+#ifdef DEBUG_PGA460
+		/* Full register dump — ~4.4 s per sensor; only for bench verification. */
 		PGA460_ReadAndPrintEEPROM(i);
+#endif /* DEBUG_PGA460 */
 //		// Step 2: EEPROM bulk write (shadow -> device)
 //		if (PGA460_EEPROMBulkWrite(i) != HAL_OK) {
 //			DEBUG("Sensor %u: EEPROM bulk write failed!\n", i);
@@ -554,9 +568,14 @@ HAL_StatusTypeDef PGA460_CheckStatus(uint8_t sensorID) {
 
 /**
  * @brief PGA460_EEPROMBulkWrite function implementation.
- * @details Unlocks the EEPROM if needed, then sends the full 44-byte EEImage_t
- *          (UserData + TVG + Settings) from sensors[sensorID].Registers.EEData
- *          using CMD 0x0C.  Frame format: [SYNC][CMD][44 bytes][CHK].
+ * @details Sends the 43-byte EEPROM payload (UserData[20] + TVG[7] + Settings[16])
+ *          using CMD 0x0C.  EE_CRC (register 0x2B, the last byte of Settings_t) is
+ *          intentionally excluded — the device auto-calculates and stores it on burn.
+ *          Confirmed against TI USSC library calcChecksum (EEBW case): checksumLoops=44
+ *          covers CMD + 43 data bytes; EE_CRC is never part of the bulk-write payload.
+ *
+ *          Frame layout: [SYNC][CMD][43 bytes][CHK]  = 45 bytes total.
+ *          Checksum input: CMD + 43 data bytes = 44 bytes.
  * @param sensorID  Sensor UART address (0-7).
  * @return HAL status.
  */
@@ -568,23 +587,69 @@ HAL_StatusTypeDef PGA460_EEPROMBulkWrite(uint8_t sensorID) {
 			return HAL_ERROR;
 		}
 	}
-	// Step 2: Construct UART frame
-	uint8_t frame[46] = {0};
+	/* Step 2: Build 45-byte frame.
+	 * EEImage_t = UserData[20] + TVG[7] + Settings[17] = 44 bytes.
+	 * The last Settings byte is EE_CRC (auto-computed by the device; must NOT be
+	 * sent).  We copy only 43 bytes (sizeof(EEImage_t) - 1).               */
+	uint8_t frame[45] = {0};
 	frame[0] = PGA460_SYNC;
-	frame[1] = (uint8_t)((sensorID << 5) | (PGA460_CMD_EEPROM_BULK_WRITE));
-	memcpy(&frame[2], &sensors[sensorID].Registers.EEData, 44); // 44 bytes
-	frame[45] = PGA460_CalculateChecksum(&frame[1], 44); // Checksum over CMD + EEPROM bytes
-	// Step 4: Transmit
+	frame[1] = (uint8_t)((sensorID << 5) | PGA460_CMD_EEPROM_BULK_WRITE);
+	memcpy(&frame[2], &sensors[sensorID].Registers.EEData, sizeof(EEImage_t) - 1u); /* 43 bytes, no EE_CRC */
+	/* Checksum: CMD (frame[1]) + 43 data bytes = 44 inputs */
+	frame[44] = PGA460_CalculateChecksum(&frame[1], 44u);
+	// Step 3: Transmit
 	if (HAL_UART_Transmit(&huart3, frame, sizeof(frame), PGA460_UART_TIMEOUT_MS) != HAL_OK) {
 		DEBUG("Sensor %d: EEPROM Bulk Write Failed!\n", sensorID);
 		return HAL_ERROR;
 	}
-	HAL_Delay(1);  // Wait for EEPROM write
+	HAL_Delay(1);
 	if (PGA460_SetEEPROMAccess(sensorID, 0) != HAL_OK) {
 		DEBUG("Sensor %d: EEPROM lock failed after bulk write\n", sensorID);
 		return HAL_ERROR;
 	}
 	return HAL_OK;
+}
+
+/**
+ * @brief PGA460_EEPROMBulkRead function implementation.
+ * @details Sends CMD 0x0B (EEPROM Bulk Read) and receives the 46-byte response:
+ *          [DIAG][44 EEData bytes][CHK].  The 44 bytes are copied directly into
+ *          sensors[sensorID].Registers.EEData, populating UserData[0..19], TVG,
+ *          and Settings in one shot.  This must be called during PGA460_Init()
+ *          so that Wind_LoadCalibration() can read path lengths from UserData[0..3].
+ * @param sensorID  Sensor UART address (0-7).
+ * @return HAL status.
+ */
+HAL_StatusTypeDef PGA460_EEPROMBulkRead(uint8_t sensorID) {
+    // TX frame: [SYNC][CMD][CHK] ? 3 bytes
+    uint8_t tx[3];
+    tx[0] = PGA460_SYNC;
+    tx[1] = (uint8_t)((sensorID << 5) | PGA460_CMD_EEPROM_BULK_READ);
+    tx[2] = PGA460_CalculateChecksum(&tx[1], 1);
+
+    if (HAL_UART_Transmit(&huart3, tx, sizeof(tx), PGA460_UART_TIMEOUT_MS) != HAL_OK) {
+        DEBUG("Sensor %u: EEPROM Bulk Read TX failed\n", sensorID);
+        return HAL_ERROR;
+    }
+
+    // RX frame: [DIAG][44 EEData bytes][CHK] ? 46 bytes
+    uint8_t rx[46] = {0};
+    if (HAL_UART_Receive(&huart3, rx, sizeof(rx), PGA460_UART_TIMEOUT_MS) != HAL_OK) {
+        DEBUG("Sensor %u: EEPROM Bulk Read RX failed\n", sensorID);
+        return HAL_ERROR;
+    }
+
+    // rx[0] = DIAG, rx[1..44] = EEData, rx[45] = CHK
+    memcpy(&sensors[sensorID].Registers.EEData, &rx[1], sizeof(EEImage_t));
+
+    DEBUG("Sensor %u: EEPROM Bulk Read OK - UserData[0..3] = %02X %02X %02X %02X\n",
+          sensorID,
+          sensors[sensorID].Registers.EEData.UserData[0],
+          sensors[sensorID].Registers.EEData.UserData[1],
+          sensors[sensorID].Registers.EEData.UserData[2],
+          sensors[sensorID].Registers.EEData.UserData[3]);
+
+    return HAL_OK;
 }
 
 /**
