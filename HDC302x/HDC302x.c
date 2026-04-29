@@ -118,8 +118,8 @@ void HDC302x_Reset() {
  *            4. Programs the default power-on state to 4 Hz / lowest-noise
  *               (HDC302X_CONFIG_4HZ_LOWEST_NOISE via HDC302X_CMD_PROGRAM_READ_DEFAULT_STATE),
  *               stored in NVM so the sensor resumes auto measurement after a power cycle.
- *            5. Starts continuous auto measurement at 4 Hz, lowest noise
- *               (HDC302X_CMD_AUTO_MEASUREMENT_4_PER_SECOND_LPM0).
+ *            5. Starts continuous auto measurement at 1 Hz, lowest noise
+ *               (HDC302X_CMD_AUTO_MEASUREMENT_1_PER_SECOND_LPM0).
  * @param sensorObj Pointer to sensor handle. Caller must set Address before calling.
  * @return HAL status.
  */
@@ -147,23 +147,23 @@ HAL_StatusTypeDef HDC302x_Init(HDC302x_t* sensorObj) {
         return status;
     }
 
-    // Step 4: Program the default power-on measurement state to 4 Hz, lowest noise.
+    // Step 4: Program the default power-on measurement state to 1 Hz, lowest noise.
     // Stored in NVM so the sensor resumes auto measurement after a power cycle.
-    sensorObj->Config = HDC302X_CONFIG_4HZ_LOWEST_NOISE;
+    sensorObj->Config = HDC302X_CONFIG_1HZ_LOWEST_NOISE;
     sensorObj->Cmd    = HDC302X_CMD_PROGRAM_READ_DEFAULT_STATE;
     status = SendDeviceCommand(sensorObj);
     if (status != HAL_OK) {
         return status;
     }
 
-    // Step 5: Start continuous auto measurement at 4 Hz, lowest noise mode
+    // Step 5: Start continuous auto measurement at 1 Hz, lowest noise mode
     sensorObj->Config.CFG_CRC = 0x00;  // No config payload for the auto-measurement command
-    return HDC302x_StartAutoMeasurement(sensorObj, HDC302X_CMD_AUTO_MEASUREMENT_4_PER_SECOND_LPM0);
+    return HDC302x_StartAutoMeasurement(sensorObj, HDC302X_CMD_AUTO_MEASUREMENT_1_PER_SECOND_LPM0);
 }
 
 /**
  * @brief Starts continuous auto measurement mode at the specified rate and noise level.
- * @details HDC302x_Init() already starts 4 Hz, lowest noise by default. Call this function
+ * @details HDC302x_Init() already starts 1 Hz, lowest noise by default. Call this function
  *          only if a different rate or noise mode is needed at runtime. Use the predefined
  *          command macros, e.g.:
  *            - HDC302X_CMD_AUTO_MEASUREMENT_4_PER_SECOND_LPM0 — 4 Hz, lowest noise (default)
@@ -326,6 +326,23 @@ HAL_StatusTypeDef HDC302x_ReadHistory(HDC302x_t* sensorObj) {
     }
 
     return HAL_OK;
+}
+
+/**
+ * @brief Calculates the dew point temperature from the latest sensor reading.
+ * @details Uses the Magnus-Tetens approximation:
+ *            gamma = (A * T / (B + T)) + ln(RH / 100)
+ *            Td    = B * gamma / (A - gamma)
+ *          where A = DEW_POINT_CONST_A (17.27), B = DEW_POINT_CONST_B (237.7 °C).
+ *          Requires HDC302x_ReadData() to have been called first.
+ * @param sensorObj Pointer to sensor handle.
+ * @return Dew point in degrees Celsius.
+ */
+float HDC302x_GetDewPoint(HDC302x_t* sensorObj) {
+    float t     = sensorObj->Data.Temperature;
+    float rh    = sensorObj->Data.Humidity;
+    float gamma = ((DEW_POINT_CONST_A * t) / (DEW_POINT_CONST_B + t)) + logf(rh / 100.0f);
+    return (DEW_POINT_CONST_B * gamma) / (DEW_POINT_CONST_A - gamma);
 }
 
 /**
@@ -503,8 +520,8 @@ HAL_StatusTypeDef HDC302x_SetOffset(HDC302x_t* sensorObj, float temp_offset_c, f
     // Step 4: Wait for EEPROM programming to complete (datasheet: t_PROG, I2C blocked during this)
     HAL_Delay(50);
 
-    // Step 5: Resume 4 Hz / lowest-noise auto measurement
-    return HDC302x_StartAutoMeasurement(sensorObj, HDC302X_CMD_AUTO_MEASUREMENT_4_PER_SECOND_LPM0);
+    // Step 5: Resume 1 Hz / lowest-noise auto measurement
+    return HDC302x_StartAutoMeasurement(sensorObj, HDC302X_CMD_AUTO_MEASUREMENT_1_PER_SECOND_LPM0);
 }
 
 /**

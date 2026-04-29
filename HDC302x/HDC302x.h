@@ -54,6 +54,10 @@ extern "C" {
 #define HDC302X_TEMP_COEFF1			0.00267009377f		// Temperature conversion coefficient (175  / 65535)
 #define HDC302X_TEMP_COEFF2			45.0f				// Temperature offset (subtract 45 deg C)
 
+// Dew point calculation constants (Magnus-Tetens approximation)
+#define DEW_POINT_CONST_A				17.27f	// Magnus-Tetens constant A
+#define DEW_POINT_CONST_B				237.7f	// Magnus-Tetens constant B
+
 // Condensation detection and heater control thresholds
 // Heater activates when (Temperature - DewPoint) < DEW_MARGIN_C
 #define DEW_MARGIN_C						3.0f	// Start heater when within 3 deg C of dew point
@@ -420,7 +424,12 @@ HAL_StatusTypeDef HDC302x_ClearStatus(HDC302x_t* sensorObj);
  * @return HAL status.
  */
 HAL_StatusTypeDef HDC302x_ReadHistory(HDC302x_t* sensorObj);
-
+/**
+ * @brief HDC302x_GetDewPoint function.
+ * @param sensorObj Pointer to sensor handle (requires valid Data.Temperature/Humidity).
+ * @return Dew point in degrees Celsius.
+ */
+float HDC302x_GetDewPoint(HDC302x_t* sensorObj);
 HAL_StatusTypeDef HDC302x_HeaterEnable(HDC302x_t* sensorObj, HDC302x_HeaterConfig_t power);
 HAL_StatusTypeDef HDC302x_HeaterDisable(HDC302x_t* sensorObj);
 HDC302x_HeaterState_t HDC302x_UpdateHeater(HDC302x_t* sensorObj);
